@@ -14,6 +14,7 @@ class PageSnapshot:
     version: int
     body_html: str
     url: str
+    labels: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -59,7 +60,7 @@ class PullRequestResult:
 
 @dataclass
 class PipelineResult:
-    status: str  # "opened_pr" | "no_change_detected" | "tests_failed" | "error"
+    status: str  # "opened_pr" | "no_change_detected" | "tests_failed" | "error" | "ignored"
     page: PageSnapshot | None = None
     diff: PageDiff | None = None
     change: ChangeAgentResult | None = None

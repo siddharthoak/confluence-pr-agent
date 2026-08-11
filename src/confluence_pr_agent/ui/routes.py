@@ -15,7 +15,6 @@ import time
 from pathlib import Path
 
 import httpx
-from dotenv import set_key
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -35,7 +34,7 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 # and orchestrator.py's "running" placeholder. Fixed, not derived from run
 # history, for the same reason as ALL_ENGINES: the filter shouldn't be
 # limited to outcomes that happen to have occurred yet.
-ALL_STATUSES = ["running", "opened_pr", "tests_failed", "error", "no_change_detected"]
+ALL_STATUSES = ["running", "opened_pr", "tests_failed", "error", "no_change_detected", "ignored"]
 
 STATUS_LABELS = {
     "running": "Running",
@@ -43,6 +42,7 @@ STATUS_LABELS = {
     "tests_failed": "Tests Failed",
     "error": "Error",
     "no_change_detected": "No Change",
+    "ignored": "Ignored (label)",
 }
 
 
@@ -58,6 +58,29 @@ templates.env.filters["status_label"] = _status_label
 templates.env.filters["stage_label"] = lambda stage: STAGE_LABELS.get(stage, stage)
 
 ENV_PATH = Path(".env")
+
+
+def _write_env_updates(path: Path, updates: dict[str, str]) -> None:
+    # Deliberately not python-dotenv's set_key(): it writes via a temp file
+    # + os.replace() rename, which raises "Device or resource busy" when
+    # .env is bind-mounted as a single file into the container (the rename
+    # target is a mount point, not a plain file the kernel will let us
+    # replace). Rewriting the existing file's content in place sidesteps
+    # that entirely.
+    lines = path.read_text().splitlines() if path.exists() else []
+    remaining = dict(updates)
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in remaining:
+                new_lines.append(f"{key}={remaining.pop(key)}")
+                continue
+        new_lines.append(line)
+    for key, value in remaining.items():
+        new_lines.append(f"{key}={value}")
+    path.write_text("\n".join(new_lines) + "\n")
 
 
 @router.get("/ui")
@@ -121,6 +144,7 @@ async def save_config(request: Request):
     if not ENV_PATH.exists():
         ENV_PATH.write_text("")
 
+    updates: dict[str, str] = {}
     for f in CONFIG_FIELDS:
         raw = form.get(f.key)
         if raw is None:
@@ -129,7 +153,10 @@ async def save_config(request: Request):
         if f.secret and value == "":
             continue  # blank secret field means "leave unchanged" -- we never redisplay it
         os.environ[f.key] = value
-        set_key(str(ENV_PATH), f.key, value, quote_mode="never")
+        updates[f.key] = value
+
+    if updates:
+        _write_env_updates(ENV_PATH, updates)
 
     get_settings.cache_clear()
     return RedirectResponse(url="/ui/config?saved=1", status_code=303)

@@ -204,6 +204,16 @@ python -m pytest
   failing tests, PR API error) does not advance the stored page version, so
   the next webhook delivery for that page retries from the same diff. There's
   no separate retry queue or backoff in this POC.
+- **Only labeled pages are processed, if any labels are configured.**
+  `CONFLUENCE_ALLOWED_LABELS` (managed via the tag-list editor at
+  `/ui/config`) is checked right after fetching the page, before any diff
+  computation, cloning, or agent work — so an unlabeled page (meeting notes,
+  design docs, an unreviewed BRD) costs nothing beyond the initial fetch.
+  Empty = no filtering, everything is eligible. Intended workflow: a BRD
+  author writes the spec with no knowledge of which repo(s) are involved; a
+  tech reviewer applies the label once it's actually ready for the agent to
+  act on — the label doubles as an approval gate, not just a category.
+  Shows up as an `ignored` run in `/ui/runs`, not a silently-dropped request.
 - **HTML-to-text diffing is a lightweight regex strip**, not a full XHTML
   parser (`confluence/diff.py::_to_plain_text`) — good enough to produce a
   readable diff for the agent's prompt, not a faithful markup

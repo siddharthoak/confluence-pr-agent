@@ -12,13 +12,14 @@ from confluence_pr_agent.storage.page_store import PageStore, StoredPage
 from confluence_pr_agent.storage.run_store import RunStore
 
 
-def _page(version: int, body: str = "<p>spec</p>") -> PageSnapshot:
+def _page(version: int, body: str = "<p>spec</p>", labels: list[str] | None = None) -> PageSnapshot:
     return PageSnapshot(
         page_id="123456",
         title="Checkout Flow Spec",
         version=version,
         body_html=body,
         url="https://example.atlassian.net/wiki/spaces/SD/pages/123456",
+        labels=labels or [],
     )
 
 
@@ -78,6 +79,56 @@ async def test_no_change_detected_skips_everything(settings):
     deps.change_engine.implement_change.assert_not_called()
     deps.github.open_pull_request.assert_not_called()
     deps.sendgrid.send_email.assert_not_called()
+
+
+async def test_page_without_required_label_is_ignored_before_any_real_work(settings):
+    settings.confluence_allowed_labels = "brd,spec-for-agent"
+    page = _page(1, labels=["meeting-notes"])
+    deps = _make_deps(settings, page=page)
+
+    result = await run_pipeline("123456", deps=deps)
+
+    assert result.status == "ignored"
+    assert "brd" in (result.error or "")
+    deps.git.clone.assert_not_called()
+    deps.change_engine.implement_change.assert_not_called()
+    deps.github.open_pull_request.assert_not_called()
+    deps.sendgrid.send_email.assert_not_called()
+
+    runs = deps.run_store.list_runs()
+    assert runs[0]["status"] == "ignored"
+
+
+async def test_page_label_match_is_case_insensitive(settings, monkeypatch):
+    settings.confluence_allowed_labels = "BRD"
+    page = _page(2, body="<p>spec v2</p>", labels=["brd"])
+    deps = _make_deps(settings, page=page)
+    deps.store.put(_stored(1, "<p>spec v1</p>", page.url))
+
+    async def _fake_run_tests(repo_dir, command):
+        return RepoTestResult(passed=True, output="2 passed", command=command)
+
+    monkeypatch.setattr(orchestrator, "run_tests", _fake_run_tests)
+
+    result = await run_pipeline("123456", deps=deps)
+
+    assert result.status == "opened_pr"
+
+
+async def test_no_allowed_labels_configured_means_no_filtering(settings):
+    """Empty CONFLUENCE_ALLOWED_LABELS (the default) processes every page --
+    this is the backward-compatible behavior for anyone who hasn't set up
+    labels at all.
+    """
+    settings.confluence_allowed_labels = ""
+    page = _page(1, labels=[])  # no labels on the page at all
+    deps = _make_deps(settings, page=page)
+    deps.store.put(_stored(1, page.body_html, page.url))
+
+    result = await run_pipeline("123456", deps=deps)
+
+    # falls through to the normal no-op path (same version, no labels involved)
+    assert result.status == "no_change_detected"
 
 
 async def test_successful_change_opens_pr_and_emails_team(settings, monkeypatch):

@@ -20,7 +20,12 @@
   {% endif %}
 
   <fieldset>
-    <legend>{% if run.status == "running" %}Progress{% else %}How this was built{% endif %}</legend>
+    <legend>
+      {% if run.status == "running" %}Progress
+      {% elif run.status == "opened_pr" %}How this was built
+      {% else %}What happened
+      {% endif %}
+    </legend>
     <div class="flow">
       {% for step in flow_steps %}
       <div class="flow-step flow-step--{{ step.state }}">
@@ -55,7 +60,11 @@
         <tr><th>Target repo</th><td>{{ run.target_repo }}</td></tr>
         <tr><th>Pull request</th><td>{% if run.pr_url %}<a class="pr-link" href="{{ run.pr_url }}" target="_blank" rel="noopener">#{{ run.pr_number }} &rarr;</a>{% else %}&mdash;{% endif %}</td></tr>
         <tr><th>Email</th><td>{% if run.email_sent %}<span style="color: var(--success-text);">sent</span>{% elif run.email_error %}<span style="color: var(--text-muted);">not sent &mdash; {{ run.email_error }}</span>{% else %}&mdash;{% endif %}</td></tr>
-        {% if run.error %}<tr><th>Error</th><td style="color: var(--error-text);">{{ run.error }}</td></tr>{% endif %}
+        {% if run.error and run.status == "ignored" %}
+          <tr><th>Reason</th><td style="color: var(--text-muted);">{{ run.error }}</td></tr>
+        {% elif run.error %}
+          <tr><th>Error</th><td style="color: var(--error-text);">{{ run.error }}</td></tr>
+        {% endif %}
       </tbody>
     </table>
   </fieldset>

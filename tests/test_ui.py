@@ -56,6 +56,16 @@ def test_config_form_renders(client):
     assert "CHANGE_AGENT_ENGINE" in resp.text
 
 
+def test_config_form_renders_taglist_editor_for_allowed_labels(client, _isolated_env_file):
+    client.post("/ui/config", data={"CONFLUENCE_ALLOWED_LABELS": "brd,spec-for-agent"})
+
+    resp = client.get("/ui/config")
+
+    assert 'id="CONFLUENCE_ALLOWED_LABELS"' in resp.text
+    assert 'value="brd,spec-for-agent"' in resp.text  # non-secret, so redisplayed via the hidden input
+    assert "taglist-editor" in resp.text
+
+
 def test_saving_config_writes_env_file(client, _isolated_env_file):
     resp = client.post(
         "/ui/config",
@@ -68,6 +78,29 @@ def test_saving_config_writes_env_file(client, _isolated_env_file):
     content = _isolated_env_file.read_text()
     assert "TARGET_REPO=acme/widgets" in content
     assert "CHANGE_AGENT_ENGINE=cursor" in content
+
+
+def test_saving_config_survives_env_file_being_unrenamable(client, _isolated_env_file, monkeypatch):
+    # Regression test: .env is bind-mounted as a single file into the
+    # container, so any write path that renames a temp file onto it (like
+    # python-dotenv's set_key) raises "Device or resource busy" -- os.replace
+    # is disallowed onto a bind-mount target. Saving must write the file's
+    # contents in place instead of ever calling replace/rename.
+    def _boom(*args, **kwargs):
+        raise OSError(16, "Device or resource busy")
+
+    monkeypatch.setattr(os, "replace", _boom)
+    monkeypatch.setattr(os, "rename", _boom)
+
+    resp = client.post(
+        "/ui/config",
+        data={"TARGET_REPO": "acme/widgets"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    content = _isolated_env_file.read_text()
+    assert "TARGET_REPO=acme/widgets" in content
 
 
 def test_blank_secret_field_does_not_clear_existing_value(client, _isolated_env_file):
@@ -113,6 +146,37 @@ def test_status_dropdown_uses_readable_labels_not_raw_values(client):
     assert ">Running</option>" in resp.text
     assert ">Tests Failed</option>" in resp.text
     assert ">No Change</option>" in resp.text
+    assert ">Ignored (label)</option>" in resp.text
+
+
+def test_ignored_run_renders_with_reason_not_as_a_red_error(client):
+    from confluence_pr_agent.models import RunRecord
+
+    store = RunStore(get_settings().runs_store_path)
+    store.upsert_run(
+        RunRecord(
+            run_id="ignored-1",
+            started_at="2026-01-01T00:00:00+00:00",
+            finished_at="2026-01-01T00:00:01+00:00",
+            duration_seconds=0.4,
+            page_id="77",
+            page_title="Team Meeting Notes",
+            confluence_url="https://example.com/77",
+            engine="gemini",
+            target_repo="acme/widgets",
+            status="ignored",
+            current_stage="fetch_page",
+            error="Page has none of the required labels: brd, spec-for-agent",
+        )
+    )
+
+    list_resp = client.get("/ui/runs")
+    assert "Ignored (label)" in list_resp.text
+
+    detail_resp = client.get("/ui/runs/ignored-1")
+    assert "Reason" in detail_resp.text
+    assert "none of the required labels" in detail_resp.text
+    assert "<th>Error</th>" not in detail_resp.text
 
 
 def test_runs_list_renders_a_recorded_run(client):

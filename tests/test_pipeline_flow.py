@@ -42,6 +42,15 @@ def test_no_change_detected_marks_only_fetch_page_done_rest_skipped():
         assert states[key] == "skipped"
 
 
+def test_ignored_marks_only_fetch_page_done_rest_skipped():
+    steps = build_flow_steps(_run(status="ignored", current_stage="fetch_page"))
+    states = {s["key"]: s["state"] for s in steps}
+
+    assert states["fetch_page"] == "done"
+    for key in STAGE_KEYS[1:]:
+        assert states[key] == "skipped"
+
+
 def test_error_at_ai_agent_marks_earlier_stages_done_that_stage_failed_rest_skipped():
     steps = build_flow_steps(_run(status="error", current_stage="ai_agent"))
     states = {s["key"]: s["state"] for s in steps}

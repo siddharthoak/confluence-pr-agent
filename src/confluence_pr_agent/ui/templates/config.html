@@ -24,6 +24,15 @@
               <option value="{{ opt }}" {% if item.display_value == opt %}selected{% endif %}>{{ opt }}</option>
             {% endfor %}
           </select>
+        {% elif f.input_type == "taglist" %}
+          <input type="hidden" name="{{ f.key }}" id="{{ f.key }}" value="{{ item.display_value }}">
+          <div class="taglist-editor" data-target="{{ f.key }}">
+            <div class="taglist-chips"></div>
+            <div class="taglist-add-row">
+              <input type="text" class="taglist-input" placeholder="Add a label, then press Enter">
+              <button type="button" class="taglist-add-btn btn-secondary">Add</button>
+            </div>
+          </div>
         {% else %}
           <input
             type="{{ 'password' if f.secret else ('number' if f.input_type == 'number' else 'text') }}"
@@ -52,10 +61,85 @@
     });
   }
 
+  // Editable chip list backed by a hidden comma-separated input, so the
+  // underlying storage format (CONFIG_FIELDS treats every value as a plain
+  // string, same as every other field) doesn't need special-casing on the
+  // server -- this is purely a friendlier way to edit the same CSV.
+  function initTagLists() {
+    document.querySelectorAll(".taglist-editor").forEach((editor) => {
+      const hiddenInput = document.getElementById(editor.dataset.target);
+      const chipsEl = editor.querySelector(".taglist-chips");
+      const textInput = editor.querySelector(".taglist-input");
+      const addBtn = editor.querySelector(".taglist-add-btn");
+
+      const getTags = () => hiddenInput.value.split(",").map((t) => t.trim()).filter(Boolean);
+
+      function setTags(tags) {
+        const seen = new Set();
+        const deduped = [];
+        for (const t of tags) {
+          const key = t.toLowerCase();
+          if (!seen.has(key)) {
+            seen.add(key);
+            deduped.push(t);
+          }
+        }
+        hiddenInput.value = deduped.join(",");
+        render();
+      }
+
+      function render() {
+        const tags = getTags();
+        chipsEl.innerHTML = "";
+        if (tags.length === 0) {
+          const empty = document.createElement("span");
+          empty.className = "taglist-empty";
+          empty.textContent = "No labels set — every page will be processed.";
+          chipsEl.appendChild(empty);
+          return;
+        }
+        tags.forEach((tag) => {
+          const chip = document.createElement("span");
+          chip.className = "taglist-chip";
+          chip.textContent = tag;
+          const removeBtn = document.createElement("button");
+          removeBtn.type = "button";
+          removeBtn.className = "taglist-chip-remove";
+          removeBtn.textContent = "×";
+          removeBtn.setAttribute("aria-label", "Remove " + tag);
+          removeBtn.addEventListener("click", () => {
+            setTags(getTags().filter((t) => t.toLowerCase() !== tag.toLowerCase()));
+          });
+          chip.appendChild(removeBtn);
+          chipsEl.appendChild(chip);
+        });
+      }
+
+      function addFromInput() {
+        const value = textInput.value.trim();
+        if (!value) return;
+        setTags([...getTags(), value]);
+        textInput.value = "";
+        textInput.focus();
+      }
+
+      addBtn.addEventListener("click", addFromInput);
+      textInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          addFromInput();
+        }
+      });
+
+      render();
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     syncEngineFields();
     const select = document.getElementById("CHANGE_AGENT_ENGINE");
     if (select) select.addEventListener("change", syncEngineFields);
+    initTagLists();
   });
 </script>
 {% endblock %}

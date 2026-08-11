@@ -154,6 +154,25 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
     try:
         page = await deps.confluence.fetch_page(page_id)
         progress["page"] = page
+
+        allowed_labels = settings.confluence_allowed_labels_list
+        if allowed_labels:
+            page_labels = {label.lower() for label in page.labels}
+            if not page_labels & set(allowed_labels):
+                logger.info(
+                    "Page %s labels %s don't include any of %s; ignoring.",
+                    page_id,
+                    sorted(page_labels),
+                    allowed_labels,
+                )
+                return finish(
+                    PipelineResult(
+                        status="ignored",
+                        page=page,
+                        error=f"Page has none of the required labels: {', '.join(allowed_labels)}",
+                    )
+                )
+
         diff = compute_diff(deps.store, page)
 
         if not diff.is_first_seen and diff.diff_text == "":

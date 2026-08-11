@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     confluence_user_email: str = Field(default="")
     confluence_api_token: str = Field(default="")
     confluence_webhook_secret: str = Field(default="")
+    # Comma-separated Confluence labels. A page must have at least one of
+    # these to be processed -- e.g. "brd,spec-for-agent" so other project
+    # content (meeting notes, design docs) in the same space is ignored.
+    # Empty = no filtering (every page is eligible), for backward compat.
+    confluence_allowed_labels: str = Field(default="")
 
     # GitHub / target repo
     github_token: str = Field(default="")
@@ -63,6 +68,10 @@ class Settings(BaseSettings):
     @property
     def email_to_list(self) -> list[str]:
         return [addr.strip() for addr in self.email_to_addresses.split(",") if addr.strip()]
+
+    @property
+    def confluence_allowed_labels_list(self) -> list[str]:
+        return [label.strip().lower() for label in self.confluence_allowed_labels.split(",") if label.strip()]
 
     @property
     def data_dir_path(self) -> Path:

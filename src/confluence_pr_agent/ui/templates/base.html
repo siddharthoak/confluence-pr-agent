@@ -149,6 +149,49 @@
   }
   .btn-danger:hover { background: var(--error-bg); }
 
+  .btn-secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 0.45rem 0.9rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    border-radius: 6px;
+  }
+  .btn-secondary:hover { background: rgba(255, 255, 255, 0.04); color: var(--text); }
+
+  .taglist-editor { margin-top: 0.35rem; }
+  .taglist-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; min-height: 1.6rem; }
+  .taglist-empty { font-size: 0.8rem; color: var(--text-muted); font-style: italic; }
+  .taglist-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: rgba(91, 156, 230, 0.14);
+    border: 1px solid rgba(91, 156, 230, 0.35);
+    color: var(--accent-blue);
+    padding: 0.2rem 0.3rem 0.2rem 0.65rem;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    font-weight: 600;
+  }
+  .taglist-chip-remove {
+    background: none;
+    border: none;
+    color: inherit;
+    padding: 0;
+    width: 18px;
+    height: 18px;
+    line-height: 1;
+    border-radius: 50%;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  .taglist-chip-remove:hover { background: rgba(91, 156, 230, 0.25); }
+  .taglist-add-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+  .taglist-add-row .taglist-input { margin-top: 0; flex: 1; }
+  .taglist-add-row .taglist-add-btn { flex-shrink: 0; }
+
   .filter-bar {
     display: flex;
     flex-wrap: wrap;
@@ -186,6 +229,7 @@
   .badge-tests_failed { background: var(--error-bg); color: var(--error-text); border-color: var(--error-border); }
   .badge-error { background: var(--error-bg); color: var(--error-text); border-color: var(--error-border); }
   .badge-no_change_detected { background: var(--neutral-bg); color: var(--neutral-text); }
+  .badge-ignored { background: var(--neutral-bg); color: var(--neutral-text); }
   .badge-running {
     background: rgba(91, 156, 230, 0.16);
     color: var(--accent-blue);

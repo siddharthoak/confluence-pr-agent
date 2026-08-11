@@ -39,7 +39,7 @@ class ConfigField:
     label: str
     group: str
     secret: bool = False
-    input_type: str = "text"  # text | password | number | select
+    input_type: str = "text"  # text | password | number | select | taglist
     options: list[str] = field(default_factory=list)
     placeholder: str = ""
     help_text: str = ""
@@ -57,6 +57,14 @@ CONFIG_FIELDS: list[ConfigField] = [
     ConfigField(
         "CONFLUENCE_WEBHOOK_SECRET", "Webhook secret (optional)", "Confluence", secret=True,
         help_text="Leave blank to disable signature verification on inbound webhooks.",
+    ),
+    ConfigField(
+        "CONFLUENCE_ALLOWED_LABELS", "Allowed page labels", "Confluence", input_type="taglist",
+        help_text=(
+            "Only pages carrying at least one of these Confluence labels are processed -- "
+            "everything else (meeting notes, design docs, other project content) is ignored. "
+            "Leave empty to process any page (no filtering)."
+        ),
     ),
     # GitHub / target repo
     ConfigField("TARGET_REPO", "Target repo", "GitHub", placeholder="owner/name"),

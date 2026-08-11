@@ -44,7 +44,7 @@ def build_flow_steps(run: dict) -> list[dict]:
             state = "done" if i < current_index else "active" if i == current_index else "pending"
         elif status in ("error", "tests_failed"):
             state = "done" if i < current_index else "failed" if i == current_index else "skipped"
-        elif status == "no_change_detected":
+        elif status in ("no_change_detected", "ignored"):
             state = "done" if i <= current_index else "skipped"
         elif status == "opened_pr":
             if key == "send_email":
