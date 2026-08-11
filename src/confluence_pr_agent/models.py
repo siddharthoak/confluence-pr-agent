@@ -92,6 +92,7 @@ class RunRecord:
     engine: str
     target_repo: str
     status: str
+    current_stage: str | None = None  # last stage entered -- see pipeline/stages.py
     files_changed: list[str] = field(default_factory=list)
     pr_number: int | None = None
     pr_url: str | None = None
@@ -102,3 +103,4 @@ class RunRecord:
     usage: dict | None = None
     raw_log: str | None = None  # tail of the engine's own output; detail-page only
     test_output: str | None = None  # tail of the target repo's test command output; detail-page only
+    spec_diff: str | None = None  # the Confluence diff text the agent was actually prompted with

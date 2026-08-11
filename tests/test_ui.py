@@ -311,6 +311,7 @@ def test_run_detail_page_shows_full_record_including_usage_and_raw_log(client):
             email_sent=True,
             usage={"input_tokens": 1200, "output_tokens": 340, "total_cost_usd": 0.021},
             raw_log="[assistant] Reading models.py\n[tool_use] Edit ...",
+            spec_diff="-Patients cannot cancel.\n+Patients can cancel with a reason.",
         )
     )
 
@@ -326,6 +327,49 @@ def test_run_detail_page_shows_full_record_including_usage_and_raw_log(client):
     assert "Reading models.py" in resp.text  # raw log present (inside a collapsed accordion)
     assert "Raw engine output" in resp.text
     assert "sent" in resp.text
+
+    # spec diff, colored and visible (not tucked in an accordion -- see the note explaining why)
+    assert "Confluence Spec Change" in resp.text
+    assert '<span class="diff-remove">-Patients cannot cancel.</span>' in resp.text
+    assert '<span class="diff-add">+Patients can cancel with a reason.</span>' in resp.text
+
+    # the flow diagram: all 6 stages shown, every one "done" for a completed opened_pr run
+    # (count class="flow-step flow-step--done" specifically -- the bare substring
+    # "flow-step--done" also appears once in the <style> block's CSS selector)
+    assert "How this was built" in resp.text
+    for label in ["Confluence", "Clone Repo", "AI Agent", "Tests", "Pull Request", "Email"]:
+        assert label in resp.text
+    assert resp.text.count("flow-step flow-step--done") == 6
+    assert "flow-step flow-step--pending" not in resp.text
+
+
+def test_run_detail_page_shows_progress_heading_and_active_stage_when_running(client):
+    from confluence_pr_agent.models import RunRecord
+
+    store = RunStore(get_settings().runs_store_path)
+    store.upsert_run(
+        RunRecord(
+            run_id="running-detail",
+            started_at="2026-01-01T00:00:00+00:00",
+            finished_at="2026-01-01T00:00:00+00:00",
+            duration_seconds=12.0,
+            page_id="99",
+            page_title="",
+            confluence_url="",
+            engine="gemini",
+            target_repo="acme/widgets",
+            status="running",
+            current_stage="ai_agent",
+        )
+    )
+
+    resp = client.get("/ui/runs/running-detail")
+
+    assert resp.status_code == 200
+    assert "Progress" in resp.text
+    assert "flow-step flow-step--active" in resp.text
+    assert resp.text.count("flow-step flow-step--done") == 2  # fetch_page, clone_repo
+    assert "Confluence Spec Change" not in resp.text  # no spec_diff recorded for this run
 
 
 def test_run_detail_page_404s_for_unknown_run_id(client):

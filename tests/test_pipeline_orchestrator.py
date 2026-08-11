@@ -113,6 +113,9 @@ async def test_successful_change_opens_pr_and_emails_team(settings, monkeypatch)
     assert runs[0]["pr_url"] == "https://github.com/acme/widgets/pull/7"
     assert runs[0]["files_changed"] == ["src/checkout.py", "tests/test_checkout.py"]
     assert runs[0]["duration_seconds"] >= 0
+    assert runs[0]["current_stage"] == "send_email"
+    assert runs[0]["spec_diff"] is not None
+    assert "spec v2" in runs[0]["spec_diff"]
 
 
 async def test_a_running_placeholder_is_visible_before_the_pipeline_finishes(settings, monkeypatch):
@@ -120,11 +123,13 @@ async def test_a_running_placeholder_is_visible_before_the_pipeline_finishes(set
     deps = _make_deps(settings, page=page)
     deps.store.put(_stored(1, "<p>spec v1</p>", page.url))
 
-    observed_status_mid_run = {}
+    observed_mid_run = {}
 
     async def _clone_side_effect(*args, **kwargs):
         runs = deps.run_store.list_runs()
-        observed_status_mid_run["status"] = runs[0]["status"] if runs else None
+        if runs:
+            observed_mid_run["status"] = runs[0]["status"]
+            observed_mid_run["current_stage"] = runs[0]["current_stage"]
 
     deps.git.clone.side_effect = _clone_side_effect
 
@@ -135,7 +140,8 @@ async def test_a_running_placeholder_is_visible_before_the_pipeline_finishes(set
 
     result = await run_pipeline("123456", deps=deps)
 
-    assert observed_status_mid_run["status"] == "running"
+    assert observed_mid_run["status"] == "running"
+    assert observed_mid_run["current_stage"] == "clone_repo"
     # ... and the placeholder is replaced, not left behind as a second row
     assert result.status == "opened_pr"
     runs = deps.run_store.list_runs()
@@ -165,6 +171,7 @@ async def test_failing_tests_blocks_pr_and_does_not_advance_store(settings, monk
 
     runs = deps.run_store.list_runs()
     assert "ModuleNotFoundError" in runs[0]["test_output"]
+    assert runs[0]["current_stage"] == "run_tests"
 
 
 async def test_change_engine_failure_does_not_open_pr(settings):
@@ -184,6 +191,7 @@ async def test_change_engine_failure_does_not_open_pr(settings):
     runs = deps.run_store.list_runs()
     assert len(runs) == 1
     assert runs[0]["status"] == "error"
+    assert runs[0]["current_stage"] == "ai_agent"
 
 
 async def test_no_change_detected_is_still_recorded_as_a_run(settings):
@@ -196,6 +204,7 @@ async def test_no_change_detected_is_still_recorded_as_a_run(settings):
     runs = deps.run_store.list_runs()
     assert len(runs) == 1
     assert runs[0]["status"] == "no_change_detected"
+    assert runs[0]["spec_diff"] is None  # nothing to show -- diff_text is empty for an unchanged page
 
 
 async def test_missing_sendgrid_key_skips_email_without_failing_the_run(settings, monkeypatch):

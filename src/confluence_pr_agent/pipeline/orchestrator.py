@@ -30,6 +30,7 @@ from confluence_pr_agent.confluence.diff import compute_diff
 from confluence_pr_agent.models import PipelineResult, RunRecord
 from confluence_pr_agent.notifications.sendgrid_client import SendGridClient
 from confluence_pr_agent.notifications.templates import build_summary_email
+from confluence_pr_agent.pipeline.stages import STAGE_KEYS
 from confluence_pr_agent.repo.git_client import GitClient
 from confluence_pr_agent.repo.github_client import GitHubClient
 from confluence_pr_agent.storage.page_store import PageStore, StoredPage
@@ -80,30 +81,45 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
     started_at = datetime.now(timezone.utc)
     start_clock = time.monotonic()
 
-    # Written immediately, before any actual work -- so a run in progress
-    # shows up in /ui/runs as status="running" rather than being invisible
-    # until it finishes (which, for a real agentic engine, can take minutes).
-    # If the process dies mid-run this placeholder is left behind rather
-    # than ever reaching a terminal status; the delete button in /ui/runs is
-    # the way to clean one of those up.
-    deps.run_store.upsert_run(
-        RunRecord(
-            run_id=run_id,
-            started_at=started_at.isoformat(),
-            finished_at=started_at.isoformat(),
-            duration_seconds=0.0,
-            page_id=page_id,
-            page_title="",
-            confluence_url="",
-            engine=settings.change_agent_engine,
-            target_repo=settings.target_repo,
-            status="running",
+    # Mutated as the pipeline progresses so finish() (and mark_stage itself)
+    # can always report the latest known page/stage, even on a path that
+    # fails before `page` would otherwise be assigned.
+    progress: dict = {"stage": STAGE_KEYS[0], "page": None}
+
+    def mark_stage(stage: str) -> None:
+        """Records the stage the pipeline is currently entering, so a run in
+        progress shows up in /ui/runs as status="running" with a live stage
+        (not just invisible until it finishes -- which, for a real agentic
+        engine, can take minutes) and so a finished run's detail page can
+        show exactly how far it got. If the process dies mid-run this is
+        left behind rather than ever reaching a terminal status; the delete
+        button in /ui/runs is the way to clean one of those up.
+        """
+        assert stage in STAGE_KEYS, f"unknown stage {stage!r}"
+        progress["stage"] = stage
+        page = progress["page"]
+        deps.run_store.upsert_run(
+            RunRecord(
+                run_id=run_id,
+                started_at=started_at.isoformat(),
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                duration_seconds=time.monotonic() - start_clock,
+                page_id=page_id,
+                page_title=page.title if page else "",
+                confluence_url=page.url if page else "",
+                engine=settings.change_agent_engine,
+                target_repo=settings.target_repo,
+                status="running",
+                current_stage=stage,
+            )
         )
-    )
+
+    mark_stage(STAGE_KEYS[0])  # "fetch_page"
 
     def finish(result: PipelineResult) -> PipelineResult:
-        """Records this run (any outcome) before returning it."""
+        """Records this run's terminal outcome before returning it."""
         page = result.page
+        diff = result.diff
         change = result.change
         pull_request = result.pull_request
         tests = result.tests
@@ -119,6 +135,7 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                 engine=settings.change_agent_engine,
                 target_repo=settings.target_repo,
                 status=result.status,
+                current_stage=progress["stage"],
                 files_changed=change.files_changed if change else [],
                 pr_number=pull_request.number if pull_request else None,
                 pr_url=pull_request.url if pull_request else None,
@@ -129,12 +146,14 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                 usage=change.usage if change else None,
                 raw_log=(change.raw_log[-8000:] if change and change.raw_log else None),
                 test_output=(tests.output[-8000:] if tests and tests.output else None),
+                spec_diff=(diff.diff_text[:8000] if diff and diff.diff_text else None),
             )
         )
         return result
 
     try:
         page = await deps.confluence.fetch_page(page_id)
+        progress["page"] = page
         diff = compute_diff(deps.store, page)
 
         if not diff.is_first_seen and diff.diff_text == "":
@@ -156,9 +175,11 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
         repo_dir = settings.workdirs_path / f"page-{page_id}-v{page.version}"
         branch_name = f"confluence-sync/page-{page_id}-v{page.version}-{int(time.time())}"
 
+        mark_stage("clone_repo")
         await deps.git.clone(settings.target_repo, repo_dir, settings.target_repo_base_branch)
         await deps.git.create_branch(repo_dir, branch_name)
 
+        mark_stage("ai_agent")
         change = await deps.change_engine.implement_change(repo_dir, diff, settings.change_agent_max_turns)
 
         if not change.success:
@@ -177,6 +198,7 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
 
         change.files_changed = await deps.git.changed_files(repo_dir)
 
+        mark_stage("run_tests")
         tests = await run_tests(repo_dir, settings.target_repo_test_command)
         if not tests.passed:
             logger.error("Tests failed for page %s change; not opening a PR.", page_id)
@@ -184,6 +206,7 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                 PipelineResult(status="tests_failed", page=page, diff=diff, change=change, tests=tests)
             )
 
+        mark_stage("open_pr")
         commit_message = f"Sync with Confluence spec: {page.title} (v{page.version})\n\n{change.summary}"
         await deps.git.commit_all(repo_dir, commit_message)
         await deps.git.push(repo_dir, branch_name)
@@ -219,6 +242,7 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
         # fixed -- a blank SENDGRID_API_KEY produced an unhandled
         # httpx.LocalProtocolError here that the outer `except` caught,
         # discarding the pull_request from the recorded result entirely).
+        mark_stage("send_email")
         email_sent = False
         email_error: str | None = None
         if not settings.sendgrid_api_key:

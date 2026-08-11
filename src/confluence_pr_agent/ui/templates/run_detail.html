@@ -20,6 +20,32 @@
   {% endif %}
 
   <fieldset>
+    <legend>{% if run.status == "running" %}Progress{% else %}How this was built{% endif %}</legend>
+    <div class="flow">
+      {% for step in flow_steps %}
+      <div class="flow-step flow-step--{{ step.state }}">
+        <div class="flow-node">
+          {% if step.state == "done" %}
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8.5L6.2 11.5L13 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          {% elif step.state == "failed" %}
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2L12 12M12 2L2 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          {% elif step.state == "active" %}
+            <span class="flow-pulse-dot"></span>
+          {% elif step.state == "skipped" %}
+            <span>&ndash;</span>
+          {% else %}
+            {{ loop.index }}
+          {% endif %}
+        </div>
+        <div class="flow-label">{{ step.label }}</div>
+        {% if step.detail %}<div class="flow-detail">{{ step.detail }}</div>{% endif %}
+      </div>
+      {% if not loop.last %}<div class="flow-connector flow-connector--{{ step.state }}"></div>{% endif %}
+      {% endfor %}
+    </div>
+  </fieldset>
+
+  <fieldset>
     <legend>Overview</legend>
     <table>
       <tbody>
@@ -33,6 +59,18 @@
       </tbody>
     </table>
   </fieldset>
+
+  {% if spec_diff_html %}
+  <fieldset>
+    <legend>Confluence Spec Change</legend>
+    <p class="hint" style="margin: 0 0 0.75rem;">
+      What actually changed in the spec page — this is the exact diff the AI
+      agent was prompted with. (The resulting code diff is one click away on
+      the PR itself, so it isn't duplicated here.)
+    </p>
+    <pre class="code-block diff-view">{{ spec_diff_html | safe }}</pre>
+  </fieldset>
+  {% endif %}
 
   {% if run.summary %}
   <fieldset>

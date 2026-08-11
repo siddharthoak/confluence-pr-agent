@@ -21,8 +21,11 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from confluence_pr_agent.config import get_settings
+from confluence_pr_agent.pipeline.stages import STAGE_LABELS
 from confluence_pr_agent.storage.run_store import RunStore
 from confluence_pr_agent.ui.config_fields import ALL_ENGINES, CONFIG_FIELDS, ENGINE_CREDENTIAL_BY_ENGINE
+from confluence_pr_agent.ui.diff_view import render_diff_html
+from confluence_pr_agent.ui.pipeline_flow import build_flow_steps
 from confluence_pr_agent.ui.usage_summary import summarize_usage
 
 router = APIRouter()
@@ -52,6 +55,7 @@ def _status_label(status: str) -> str:
 # detail page header -- uses the same human-readable text without each one
 # needing the mapping threaded into its own route's context.
 templates.env.filters["status_label"] = _status_label
+templates.env.filters["stage_label"] = lambda stage: STAGE_LABELS.get(stage, stage)
 
 ENV_PATH = Path(".env")
 
@@ -199,10 +203,17 @@ async def run_detail(request: Request, run_id: str):
         return templates.TemplateResponse(
             request, "run_detail.html", {"run": None, "run_id": run_id}, status_code=404
         )
+    spec_diff = run.get("spec_diff")
     return templates.TemplateResponse(
         request,
         "run_detail.html",
-        {"run": run, "run_id": run_id, "usage_summary": summarize_usage(run.get("usage"))},
+        {
+            "run": run,
+            "run_id": run_id,
+            "usage_summary": summarize_usage(run.get("usage")),
+            "flow_steps": build_flow_steps(run),
+            "spec_diff_html": render_diff_html(spec_diff) if spec_diff else None,
+        },
     )
 
 
