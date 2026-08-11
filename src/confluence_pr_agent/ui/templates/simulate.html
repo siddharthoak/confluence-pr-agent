@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Simulate Confluence Webhook</h1>
+<p class="subtitle">Builds the exact payload Confluence's "page updated" webhook sends and POSTs it to this service's own <code>/webhook/confluence</code> endpoint — signed correctly if a webhook secret is configured. No Postman, no hand-written JSON.</p>
+
+{% if error %}<div class="banner banner-error">{{ error }}</div>{% endif %}
+
+<form method="post" action="/ui/simulate">
+  <label for="page_id">Confluence page ID <span class="hint">(required — the number in the page's URL)</span></label>
+  <input type="text" name="page_id" id="page_id" required pattern="[0-9]+" placeholder="123456"
+         value="{{ prefill.page_id if prefill else '' }}">
+
+  <label for="title">Page title <span class="hint">(optional, display only)</span></label>
+  <input type="text" name="title" id="title" placeholder="Patient Appointment Scheduling — Feature Spec"
+         value="{{ prefill.title if prefill else '' }}">
+
+  <label for="space_key">Space key</label>
+  <input type="text" name="space_key" id="space_key"
+         value="{{ prefill.space_key if prefill else default_space_key }}">
+
+  <button type="submit" style="margin-top: 1.25rem;">Send simulated webhook</button>
+</form>
+
+<h2 style="margin-top: 2rem; font-size: 1rem;">Payload preview</h2>
+<pre class="code-block" id="payload-preview">{}</pre>
+
+{% if result %}
+<h2 style="font-size: 1rem;">Result</h2>
+<div class="banner {{ 'banner-ok' if result.ok else 'banner-error' }}">
+  HTTP {{ result.status_code if result.status_code is not none else 'no response' }}
+  {% if result.ok %} — accepted. The pipeline is now running in the background;
+    check <a href="/ui/runs">Pipeline Runs</a> in a few seconds.
+  {% endif %}
+</div>
+<pre class="code-block">{{ result.body }}</pre>
+
+<h3 style="font-size: 0.9rem;">Payload sent</h3>
+<pre class="code-block">{{ payload_sent }}</pre>
+{% endif %}
+
+<script>
+  function updatePreview() {
+    const pageId = document.getElementById("page_id").value || "<page id>";
+    const title = document.getElementById("title").value;
+    const spaceKey = document.getElementById("space_key").value;
+    const page = { id: pageId };
+    if (title) page.title = title;
+    if (spaceKey) page.spaceKey = spaceKey;
+    document.getElementById("payload-preview").textContent =
+      JSON.stringify({ event: "page_updated", page: page }, null, 2);
+  }
+  document.addEventListener("DOMContentLoaded", () => {
+    updatePreview();
+    ["page_id", "title", "space_key"].forEach((id) => {
+      document.getElementById(id).addEventListener("input", updatePreview);
+    });
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,9 @@
+{
+  "event": "page_updated",
+  "page": {
+    "id": "123456",
+    "title": "Checkout Flow Spec",
+    "spaceKey": "SD"
+  },
+  "timestamp": 1770000000000
+}

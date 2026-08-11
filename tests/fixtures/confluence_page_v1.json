@@ -1,0 +1,13 @@
+{
+  "id": "123456",
+  "title": "Checkout Flow Spec",
+  "version": { "number": 1 },
+  "body": {
+    "storage": {
+      "value": "<p>Checkout must support credit card payments.</p>"
+    }
+  },
+  "_links": {
+    "webui": "/spaces/SD/pages/123456/Checkout+Flow+Spec"
+  }
+}

@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block content %}
+{% if run is none %}
+  <h1>Run not found</h1>
+  <p class="subtitle">No run with id <code>{{ run_id }}</code>.</p>
+  <p><a href="/ui/runs">&larr; Back to Pipeline Runs</a></p>
+{% else %}
+  <p><a href="/ui/runs">&larr; Back to Pipeline Runs</a></p>
+  <h1>
+    {{ run.page_title or run.page_id }}
+    <span class="badge badge-{{ run.status }}" style="vertical-align: middle; margin-left: 0.5rem;">{{ run.status }}</span>
+  </h1>
+  <p class="subtitle">Run <code>{{ run.run_id }}</code> &middot; engine <strong>{{ run.engine }}</strong>
+    {% if run.status != "running" %} &middot; {{ "%.1f"|format(run.duration_seconds) }}s{% endif %}</p>
+
+  {% if run.status == "running" %}
+  <div class="banner" style="background: rgba(91,156,230,0.12); border-color: rgba(91,156,230,0.35); color: var(--accent-blue);">
+    This run is still in progress. Refresh to check for an update — a real agentic engine can take several minutes.
+  </div>
+  {% endif %}
+
+  <fieldset>
+    <legend>Overview</legend>
+    <table>
+      <tbody>
+        <tr><th style="width: 160px;">Started</th><td>{{ run.started_at }}</td></tr>
+        {% if run.status != "running" %}<tr><th>Finished</th><td>{{ run.finished_at }}</td></tr>{% endif %}
+        <tr><th>Confluence page</th><td>{% if run.confluence_url %}<a href="{{ run.confluence_url }}" target="_blank" rel="noopener">{{ run.page_title or run.page_id }}</a>{% else %}{{ run.page_id }}{% endif %}</td></tr>
+        <tr><th>Target repo</th><td>{{ run.target_repo }}</td></tr>
+        <tr><th>Pull request</th><td>{% if run.pr_url %}<a class="pr-link" href="{{ run.pr_url }}" target="_blank" rel="noopener">#{{ run.pr_number }} &rarr;</a>{% else %}&mdash;{% endif %}</td></tr>
+        <tr><th>Email</th><td>{% if run.email_sent %}<span style="color: var(--success-text);">sent</span>{% elif run.email_error %}<span style="color: var(--text-muted);">not sent &mdash; {{ run.email_error }}</span>{% else %}&mdash;{% endif %}</td></tr>
+        {% if run.error %}<tr><th>Error</th><td style="color: var(--error-text);">{{ run.error }}</td></tr>{% endif %}
+      </tbody>
+    </table>
+  </fieldset>
+
+  {% if run.summary %}
+  <fieldset>
+    <legend>Summary</legend>
+    <p style="white-space: pre-wrap; line-height: 1.6; margin: 0;">{{ run.summary }}</p>
+  </fieldset>
+  {% endif %}
+
+  {% if run.files_changed %}
+  <fieldset>
+    <legend>Files changed ({{ run.files_changed|length }})</legend>
+    <ul style="margin: 0; padding-left: 1.2rem; line-height: 1.8;">
+      {% for f in run.files_changed %}<li><code>{{ f }}</code></li>{% endfor %}
+    </ul>
+  </fieldset>
+  {% endif %}
+
+  <fieldset>
+    <legend>LLM usage</legend>
+    {% if usage_summary %}
+      <table>
+        <tbody>
+          {% for label, value in usage_summary.items() %}
+          <tr><th style="width: 160px;">{{ label }}</th><td>{{ value }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <details style="margin-top: 0.9rem;">
+        <summary>Full usage data</summary>
+        <pre class="code-block">{{ run.usage | tojson(indent=2) }}</pre>
+      </details>
+    {% elif run.usage %}
+      {# Engine reported something, but summarize_usage() didn't recognize the shape -- show it raw rather than nothing. #}
+      <pre class="code-block">{{ run.usage | tojson(indent=2) }}</pre>
+    {% else %}
+      <p class="hint" style="margin: 0;">
+        Not reported by the <strong>{{ run.engine }}</strong> engine for this run
+        &mdash; either this engine's CLI doesn't expose token/cost usage in its
+        output, or this run didn't reach a point where it would report any.
+        See <code>docs/change-engines.md</code> for what each engine's output
+        actually includes.
+      </p>
+    {% endif %}
+  </fieldset>
+
+  {% if run.raw_log or run.test_output %}
+  <fieldset>
+    <legend>Diagnostics</legend>
+    {% if run.test_output %}
+    <details {% if run.status == "tests_failed" %}open{% endif %}>
+      <summary>Test output (tail)</summary>
+      <pre class="code-block" style="margin-top: 0.75rem;">{{ run.test_output }}</pre>
+    </details>
+    {% endif %}
+    {% if run.raw_log %}
+    <details>
+      <summary>Raw engine output (tail)</summary>
+      <pre class="code-block" style="margin-top: 0.75rem;">{{ run.raw_log }}</pre>
+    </details>
+    {% endif %}
+  </fieldset>
+  {% endif %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Pipeline Runs</h1>
+<p class="subtitle">Every pipeline invocation, regardless of outcome — including no-op webhook redeliveries. Newest first.</p>
+
+<form method="get" action="/ui/runs" class="filter-bar">
+  <div class="filter-field">
+    <label for="f-engine">Engine</label>
+    <select name="engine" id="f-engine">
+      <option value="">All</option>
+      {% for e in engines_available %}
+        <option value="{{ e }}" {% if filters.engine == e %}selected{% endif %}>{{ e }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="filter-field">
+    <label for="f-status">Status</label>
+    <select name="status" id="f-status">
+      <option value="">All</option>
+      {% for s in statuses_available %}
+        <option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="filter-field">
+    <label for="f-from">From</label>
+    <input type="date" name="date_from" id="f-from" value="{{ filters.date_from }}">
+  </div>
+  <div class="filter-field">
+    <label for="f-to">To</label>
+    <input type="date" name="date_to" id="f-to" value="{{ filters.date_to }}">
+  </div>
+  <div class="filter-field filter-actions">
+    <button type="submit">Apply</button>
+    {% if any_filter_active %}<a href="/ui/runs">Clear</a>{% endif %}
+  </div>
+</form>
+
+{% if runs %}
+<p class="subtitle" style="margin-bottom: 0.5rem;">
+  Showing {{ runs|length }} of {{ total_count }} run{{ "s" if total_count != 1 else "" }}.
+  {% if total_count %}
+  <form method="post" action="/ui/runs/delete-all" style="display: inline;"
+        onsubmit="return confirm('Delete all {{ total_count }} run record(s)? This cannot be undone.');">
+    <button type="submit" class="btn-danger" style="margin-left: 0.5rem;">Clear all runs</button>
+  </form>
+  {% endif %}
+</p>
+<table>
+  <thead>
+    <tr>
+      <th>Started</th>
+      <th>Page</th>
+      <th>Engine</th>
+      <th>Status</th>
+      <th>Duration</th>
+      <th>Pull request</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for run in runs %}
+    <tr>
+      <td><a href="/ui/runs/{{ run.run_id }}">{{ run.started_at.split("T")[0] }} {{ run.started_at.split("T")[1].split(".")[0] }} UTC</a></td>
+      <td>
+        {% if run.confluence_url %}
+          <a href="{{ run.confluence_url }}" target="_blank" rel="noopener">{{ run.page_title or run.page_id }}</a>
+        {% else %}
+          {{ run.page_title or run.page_id }}
+        {% endif %}
+      </td>
+      <td>{{ run.engine }}</td>
+      <td><span class="badge badge-{{ run.status }}">{{ run.status }}</span></td>
+      <td>{% if run.status == "running" %}&mdash;{% else %}{{ "%.1f"|format(run.duration_seconds) }}s{% endif %}</td>
+      <td>
+        {% if run.pr_url %}
+          <a class="pr-link" href="{{ run.pr_url }}" target="_blank" rel="noopener">#{{ run.pr_number }} &rarr;</a>
+        {% else %}
+          &mdash;
+        {% endif %}
+      </td>
+      <td>
+        <form method="post" action="/ui/runs/{{ run.run_id }}/delete"
+              onsubmit="return confirm('Delete this run record?');">
+          <button type="submit" class="btn-danger">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% elif total_count %}
+<p>No runs match these filters. <a href="/ui/runs">Clear filters</a> to see all {{ total_count }}.</p>
+{% else %}
+<p>No runs yet. Use <a href="/ui/simulate">Simulate Webhook</a> to trigger one.</p>
+{% endif %}
+{% endblock %}

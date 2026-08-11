@@ -1,0 +1,24 @@
+# Local POC deployment. Binds to 127.0.0.1 only -- this service is triggered
+# by manually curling the webhook endpoint (see docs/demo-spec-template.md),
+# not by a real internet-reachable Confluence webhook, so there's no reason
+# to expose it beyond localhost.
+version: "3.9"
+services:
+  confluence-pr-agent:
+    build:
+      context: .
+      dockerfile: Containerfile
+      args:
+        CHANGE_AGENT_ENGINE: ${CHANGE_AGENT_ENGINE:-claude_code}
+    env_file: .env
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/app/data
+      # Bind-mounted, not just loaded via env_file above: env_file only sets
+      # process env vars at container start, it does not put an actual file
+      # on the container's filesystem. The config UI (/ui/config) writes to
+      # a real .env file so edits survive a container restart -- without
+      # this mount, there'd be no file inside the container for it to write
+      # to, and edits would only last until the container is recreated.
+      - ./.env:/app/.env
