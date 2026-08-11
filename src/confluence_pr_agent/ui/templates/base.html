@@ -111,6 +111,13 @@
   }
   input::placeholder { color: #5a5e82; }
   input:focus, select:focus { outline: none; border-color: var(--accent-blue); box-shadow: 0 0 0 3px rgba(46, 123, 214, 0.25); }
+  /* color-scheme: dark alone makes Chrome render the calendar icon in a
+     light color already suited to a dark background -- do NOT also add an
+     invert() filter on top of that (that was tried first and flips the
+     already-light icon back to dark, recreating the exact camouflage
+     problem this is fixing). */
+  input[type="date"] { color-scheme: dark; }
+  input[type="date"]::-webkit-calendar-picker-indicator { cursor: pointer; }
   select { appearance: none; }
 
   .hint { font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; line-height: 1.4; }

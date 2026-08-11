@@ -92,6 +92,29 @@ def test_runs_list_empty_state(client):
     assert "No runs yet" in resp.text
 
 
+def test_runs_list_filter_dropdowns_show_every_supported_engine_and_status_even_with_no_history(client):
+    """The filter dropdowns must list everything the pipeline could ever
+    produce, not just what happens to already be in run history -- otherwise
+    they're empty right after a `Clear all runs`, which defeats the point.
+    """
+    resp = client.get("/ui/runs")
+
+    for engine in ["claude_code", "cursor", "copilot", "codex", "gemini", "antigravity"]:
+        assert f'value="{engine}"' in resp.text
+    for status in ["running", "opened_pr", "tests_failed", "error", "no_change_detected"]:
+        assert f'value="{status}"' in resp.text
+
+
+def test_status_dropdown_uses_readable_labels_not_raw_values(client):
+    resp = client.get("/ui/runs")
+
+    assert '<option value="opened_pr"' in resp.text
+    assert ">Open PR</option>" in resp.text
+    assert ">Running</option>" in resp.text
+    assert ">Tests Failed</option>" in resp.text
+    assert ">No Change</option>" in resp.text
+
+
 def test_runs_list_renders_a_recorded_run(client):
     settings = get_settings()
     store = RunStore(settings.runs_store_path)

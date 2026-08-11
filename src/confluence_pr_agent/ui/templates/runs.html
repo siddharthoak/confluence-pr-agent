@@ -18,7 +18,7 @@
     <select name="status" id="f-status">
       <option value="">All</option>
       {% for s in statuses_available %}
-        <option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>{{ s }}</option>
+        <option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>{{ s | status_label }}</option>
       {% endfor %}
     </select>
   </div>
@@ -70,7 +70,7 @@
         {% endif %}
       </td>
       <td>{{ run.engine }}</td>
-      <td><span class="badge badge-{{ run.status }}">{{ run.status }}</span></td>
+      <td><span class="badge badge-{{ run.status }}">{{ run.status | status_label }}</span></td>
       <td>{% if run.status == "running" %}&mdash;{% else %}{{ "%.1f"|format(run.duration_seconds) }}s{% endif %}</td>
       <td>
         {% if run.pr_url %}

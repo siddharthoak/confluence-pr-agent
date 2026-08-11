@@ -22,11 +22,36 @@ from fastapi.templating import Jinja2Templates
 
 from confluence_pr_agent.config import get_settings
 from confluence_pr_agent.storage.run_store import RunStore
-from confluence_pr_agent.ui.config_fields import CONFIG_FIELDS, ENGINE_CREDENTIAL_BY_ENGINE
+from confluence_pr_agent.ui.config_fields import ALL_ENGINES, CONFIG_FIELDS, ENGINE_CREDENTIAL_BY_ENGINE
 from confluence_pr_agent.ui.usage_summary import summarize_usage
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+# Every status run_pipeline can record -- see models.py::PipelineResult.status
+# and orchestrator.py's "running" placeholder. Fixed, not derived from run
+# history, for the same reason as ALL_ENGINES: the filter shouldn't be
+# limited to outcomes that happen to have occurred yet.
+ALL_STATUSES = ["running", "opened_pr", "tests_failed", "error", "no_change_detected"]
+
+STATUS_LABELS = {
+    "running": "Running",
+    "opened_pr": "Open PR",
+    "tests_failed": "Tests Failed",
+    "error": "Error",
+    "no_change_detected": "No Change",
+}
+
+
+def _status_label(status: str) -> str:
+    return STATUS_LABELS.get(status, status)
+
+
+# Registered as a Jinja filter (`{{ run.status | status_label }}`) so every
+# template that shows a status -- the filter dropdown, table badges, the
+# detail page header -- uses the same human-readable text without each one
+# needing the mapping threaded into its own route's context.
+templates.env.filters["status_label"] = _status_label
 
 ENV_PATH = Path(".env")
 
@@ -144,8 +169,8 @@ async def runs_list(
             "runs": runs,
             "total_count": len(all_runs),
             "filters": {"engine": engine, "status": status, "date_from": date_from, "date_to": date_to},
-            "engines_available": sorted({r["engine"] for r in all_runs if r.get("engine")}),
-            "statuses_available": sorted({r["status"] for r in all_runs if r.get("status")}),
+            "engines_available": ALL_ENGINES,
+            "statuses_available": ALL_STATUSES,
             "any_filter_active": bool(engine or status or date_from or date_to),
         },
     )

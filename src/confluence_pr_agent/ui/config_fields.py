@@ -8,6 +8,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# Every engine the pipeline supports, regardless of whether any have run yet
+# -- the single source of truth for both the config form's dropdown and the
+# /ui/runs filter dropdown (which must not be limited to engines that
+# happen to already appear in run history).
+ALL_ENGINES = ["claude_code", "cursor", "copilot", "codex", "gemini", "antigravity"]
+
 # Keys whose current value is never redisplayed in the form. Submitting one
 # blank means "leave it unchanged", not "clear it" -- see routes.py.
 ENGINE_CREDENTIAL_KEYS = (
@@ -60,7 +66,7 @@ CONFIG_FIELDS: list[ConfigField] = [
     # Change engine
     ConfigField(
         "CHANGE_AGENT_ENGINE", "Change engine", "Change engine", input_type="select",
-        options=["claude_code", "cursor", "copilot", "codex", "gemini", "antigravity"],
+        options=ALL_ENGINES,
     ),
     ConfigField(
         "CHANGE_AGENT_MAX_TURNS", "Max turns / timeout budget", "Change engine", input_type="number",

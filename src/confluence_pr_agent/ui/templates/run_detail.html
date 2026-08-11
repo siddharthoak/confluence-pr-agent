@@ -8,7 +8,7 @@
   <p><a href="/ui/runs">&larr; Back to Pipeline Runs</a></p>
   <h1>
     {{ run.page_title or run.page_id }}
-    <span class="badge badge-{{ run.status }}" style="vertical-align: middle; margin-left: 0.5rem;">{{ run.status }}</span>
+    <span class="badge badge-{{ run.status }}" style="vertical-align: middle; margin-left: 0.5rem;">{{ run.status | status_label }}</span>
   </h1>
   <p class="subtitle">Run <code>{{ run.run_id }}</code> &middot; engine <strong>{{ run.engine }}</strong>
     {% if run.status != "running" %} &middot; {{ "%.1f"|format(run.duration_seconds) }}s{% endif %}</p>
