@@ -1,13 +1,16 @@
-# The app service itself still binds to 127.0.0.1 only -- direct access is
-# for on-box debugging, not the intended way in. The `caddy` service is the
-# actual public-facing piece for when this needs to be reachable beyond
-# localhost (real Confluence webhook delivery, remote demo access): it
-# terminates TLS and gates every route except /webhook/confluence and
-# /healthz behind HTTP Basic Auth. See Caddyfile.example -- copy it to
+# The app service publishes no host port at all -- Caddy (the `caddy`
+# service below) is the only way to reach it, on :8080 (local testing) or
+# :80/:443 (a real domain). Caddy reaches the app over the compose-internal
+# network by service name (confluence-pr-agent:8000, see Caddyfile.example),
+# which never touches the host's network stack, so nothing needs a host
+# port published here for that to work. Consequence: running this stack
+# with a plain `podman compose up` (no --profile public) starts the app but
+# leaves it completely unreachable from the host -- that's intentional, not
+# a bug, since Caddy is what gates every route except /webhook/confluence
+# and /healthz behind HTTP Basic Auth. See Caddyfile.example -- copy it to
 # `Caddyfile` (gitignored) and fill in real credentials/domain before using
-# this service; `podman-compose up` without doing that will fail to find
-# ./Caddyfile, which is deliberate rather than starting an unauthenticated
-# proxy by accident.
+# the public profile; it'll fail to find ./Caddyfile otherwise, which is
+# deliberate rather than starting an unauthenticated proxy by accident.
 version: "3.9"
 services:
   confluence-pr-agent:
@@ -16,9 +19,8 @@ services:
       dockerfile: Containerfile
       args:
         CHANGE_AGENT_ENGINE: ${CHANGE_AGENT_ENGINE:-claude_code}
+    restart: unless-stopped
     env_file: .env
-    ports:
-      - "127.0.0.1:8000:8000"
     volumes:
       - ./data:/app/data
       # Bind-mounted, not just loaded via env_file above: env_file only sets
@@ -32,11 +34,24 @@ services:
   caddy:
     image: docker.io/library/caddy:2
     profiles: ["public"]  # `podman-compose --profile public up` -- opt-in, not started by a plain `up`
+    restart: unless-stopped
     environment:
       DOMAIN: ${DOMAIN:-http://localhost:8080}
+      # Forwarded to the app as X-Internal-Secret (see Caddyfile.example) --
+      # the app rejects any request claiming an X-Auth-User identity that
+      # doesn't also carry this. Must match INTERNAL_SHARED_SECRET in .env
+      # exactly (the app service gets it via env_file below).
+      INTERNAL_SHARED_SECRET: ${INTERNAL_SHARED_SECRET:?INTERNAL_SHARED_SECRET must be set in .env before using the public profile}
+    # Caddy binds to whatever port is actually in DOMAIN, not a fixed 80/443
+    # -- a real domain (automatic HTTPS) uses 80+443, but the documented
+    # local-testing path (DOMAIN=http://localhost:8080, see Caddyfile.example
+    # step 4) needs 8080 published instead, since Caddy skips automatic
+    # HTTPS and binds directly to :8080 for that address. Publishing all
+    # three covers both without extra config; unused ones are harmless.
     ports:
       - "80:80"
       - "443:443"
+      - "8080:8080"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

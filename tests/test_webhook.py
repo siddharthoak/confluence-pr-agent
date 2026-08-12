@@ -7,14 +7,26 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from confluence_pr_agent.config import get_settings
+from confluence_pr_agent.config import get_process_config, get_settings
 from confluence_pr_agent.webhook import app as webhook_app_module
 
 
 @pytest.fixture(autouse=True)
-def _clear_settings_cache():
+def _isolated_env(tmp_path, monkeypatch):
+    """/webhook/confluence always resolves the bootstrap/default user's
+    Settings (see webhook/app.py -- a raw webhook delivery has no
+    Caddy-authenticated identity attached to it), so DEFAULT_USER needs to
+    be set even though these tests never touch a /ui/* route. Same
+    DATA_DIR isolation as test_ui.py, for the same reason: otherwise these
+    tests would read/write the real project's live data/users/*/ state.
+    """
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("DEFAULT_USER", "testuser")
+    monkeypatch.setenv("INTERNAL_SHARED_SECRET", "")
+    get_process_config.cache_clear()
     get_settings.cache_clear()
     yield
+    get_process_config.cache_clear()
     get_settings.cache_clear()
 
 
@@ -56,8 +68,12 @@ def test_webhook_rejects_payload_without_page_id(stub_pipeline):
     assert stub_pipeline == []
 
 
-def test_webhook_verifies_signature_when_secret_configured(stub_pipeline, monkeypatch, load_fixture):
-    monkeypatch.setenv("CONFLUENCE_WEBHOOK_SECRET", "shh")
+def test_webhook_verifies_signature_when_secret_configured(stub_pipeline, load_fixture):
+    # Settings no longer reads os.environ at all (see config.py) -- the
+    # secret has to be written to the bootstrap user's own .env file, not
+    # set via monkeypatch.setenv.
+    process = get_process_config()
+    process.user_env_path(process.resolved_default_user).write_text("CONFLUENCE_WEBHOOK_SECRET=shh\n")
     get_settings.cache_clear()
 
     client = TestClient(webhook_app_module.app)

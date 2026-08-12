@@ -1,8 +1,11 @@
 """Browser UI: configure credentials, browse run history, simulate a webhook.
 
-All three pages are unauthenticated -- fine for a POC bound to 127.0.0.1
-(see podman-compose.yml), NOT something to expose beyond a trusted network
-without adding auth first, since /ui/config both reads and writes secrets.
+Every /ui/* route requires a Depends(current_username) -- see ui/auth.py --
+resolved from the X-Auth-User header Caddy forwards after Basic Auth (see
+Caddyfile.example). Everything each user sees/edits (Settings, run history,
+page-version tracking) is scoped to that username; see config.py's
+get_settings(username) and its module docstring for how that isolation is
+enforced.
 """
 
 from __future__ import annotations
@@ -10,19 +13,19 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import os
 import time
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from confluence_pr_agent.config import get_settings
+from confluence_pr_agent.config import clear_settings_cache, get_process_config, get_settings
 from confluence_pr_agent.pipeline.poller import poll_once
 from confluence_pr_agent.pipeline.stages import STAGE_LABELS
 from confluence_pr_agent.storage.run_store import RunStore
+from confluence_pr_agent.ui.auth import current_username
 from confluence_pr_agent.ui.config_fields import (
     ALL_ENGINES,
     CONFIG_FIELDS,
@@ -65,8 +68,6 @@ def _status_label(status: str) -> str:
 # needing the mapping threaded into its own route's context.
 templates.env.filters["status_label"] = _status_label
 templates.env.filters["stage_label"] = lambda stage: STAGE_LABELS.get(stage, stage)
-
-ENV_PATH = Path(".env")
 
 
 def _is_valid_int(value: str) -> bool:
@@ -116,8 +117,8 @@ async def ui_home() -> RedirectResponse:
 
 
 @router.get("/ui/how-it-works")
-async def how_it_works(request: Request):
-    settings = get_settings()
+async def how_it_works(request: Request, username: str = Depends(current_username)):
+    settings = get_settings(username)
     demo_run = {
         "status": "opened_pr",
         "current_stage": "send_email",
@@ -147,20 +148,24 @@ async def how_it_works(request: Request):
 # ---------------------------------------------------------------------------
 
 
-def _current_env_values() -> dict[str, str]:
-    # Reads os.environ, not the .env file: when this container was started
-    # with `--env-file .env` (rather than a bind-mounted .env), the values
-    # only ever exist as real process env vars -- no file to read is
-    # actually present inside the container. os.environ is also what
-    # config.get_settings() itself resolves from (config.py's
-    # load_dotenv(override=True) already folded any .env file into it at
-    # startup), so this is the one accurate source regardless of how the
-    # service was launched.
-    return {f.key: os.environ.get(f.key, "") for f in CONFIG_FIELDS}
+def _current_env_values(username: str) -> dict[str, str]:
+    # Reads through this user's own Settings, not any shared file/os.environ
+    # -- CONFIG_FIELDS keys (e.g. "TARGET_REPO") map 1:1 onto Settings'
+    # lowercase snake_case attribute names by construction (standard
+    # pydantic-settings convention), so f.key.lower() always resolves.
+    settings = get_settings(username)
+    values: dict[str, str] = {}
+    for f in CONFIG_FIELDS:
+        value = getattr(settings, f.key.lower(), "")
+        if isinstance(value, bool):
+            values[f.key] = "true" if value else "false"
+        else:
+            values[f.key] = str(value) if value else ""
+    return values
 
 
-def _config_context(saved: bool = False, error: str | None = None) -> dict:
-    values = _current_env_values()
+def _config_context(username: str, saved: bool = False, error: str | None = None) -> dict:
+    values = _current_env_values(username)
     groups: dict[str, list[dict]] = {}
     for f in CONFIG_FIELDS:
         current = values.get(f.key, "")
@@ -181,23 +186,27 @@ def _config_context(saved: bool = False, error: str | None = None) -> dict:
 
 
 @router.get("/ui/config")
-async def config_form(request: Request):
-    return templates.TemplateResponse(request, "config.html", _config_context())
+async def config_form(request: Request, username: str = Depends(current_username)):
+    return templates.TemplateResponse(request, "config.html", _config_context(username))
 
 
 @router.post("/ui/config")
-async def save_config(request: Request):
+async def save_config(request: Request, username: str = Depends(current_username)):
     form = await request.form()
 
-    # Written to both places deliberately: os.environ so the change is live
-    # for this process immediately (this is what get_settings() and every
-    # engine subprocess actually reads), and the .env file so it survives a
-    # container restart -- but only if that file is writable from in here,
-    # which requires it to be bind-mounted rather than passed via
-    # `--env-file` at container creation (env-file only sets process env,
-    # it doesn't put a file on the container's filesystem). See SETUP.md.
-    if not ENV_PATH.exists():
-        ENV_PATH.write_text("")
+    # Written only to this user's own .env file -- NOT os.environ. With
+    # multiple users' Settings potentially live in this one process,
+    # writing to process-wide os.environ here would clobber whatever any
+    # other concurrently-running user's change-engine subprocess reads next
+    # (see agent/engines/claude_code.py etc. for why those now take an
+    # explicit api_key instead of relying on ambient env). The .env file is
+    # what survives a container restart -- but only if it's bind-mounted
+    # rather than passed via `--env-file` at container creation (env-file
+    # only sets process env, it doesn't put a file on the container's
+    # filesystem). See SETUP.md.
+    env_path = get_process_config().user_env_path(username)
+    if not env_path.exists():
+        env_path.write_text("")
 
     updates: dict[str, str] = {}
     for f in CONFIG_FIELDS:
@@ -214,13 +223,12 @@ async def save_config(request: Request):
             # that calls get_settings() until someone notices and fixes the
             # file by hand. "Leave unchanged" is the only safe fallback.
             continue
-        os.environ[f.key] = value
         updates[f.key] = value
 
     if updates:
-        _write_env_updates(ENV_PATH, updates)
+        _write_env_updates(env_path, updates)
 
-    get_settings.cache_clear()
+    clear_settings_cache()
     return RedirectResponse(url="/ui/config?saved=1", status_code=303)
 
 
@@ -247,9 +255,14 @@ def _filter_runs(runs: list[dict], *, engine: str, status: str, date_from: str, 
 
 @router.get("/ui/runs")
 async def runs_list(
-    request: Request, engine: str = "", status: str = "", date_from: str = "", date_to: str = ""
+    request: Request,
+    engine: str = "",
+    status: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    username: str = Depends(current_username),
 ):
-    settings = get_settings()
+    settings = get_settings(username)
     store = RunStore(settings.runs_store_path)
     all_runs = store.list_runs()
 
@@ -270,22 +283,22 @@ async def runs_list(
 
 
 @router.post("/ui/runs/delete-all")
-async def delete_all_runs():
-    settings = get_settings()
+async def delete_all_runs(username: str = Depends(current_username)):
+    settings = get_settings(username)
     RunStore(settings.runs_store_path).clear_all()
     return RedirectResponse(url="/ui/runs", status_code=303)
 
 
 @router.post("/ui/runs/{run_id}/delete")
-async def delete_run(run_id: str):
-    settings = get_settings()
+async def delete_run(run_id: str, username: str = Depends(current_username)):
+    settings = get_settings(username)
     RunStore(settings.runs_store_path).delete_run(run_id)
     return RedirectResponse(url="/ui/runs", status_code=303)
 
 
 @router.get("/ui/runs/{run_id}")
-async def run_detail(request: Request, run_id: str):
-    settings = get_settings()
+async def run_detail(request: Request, run_id: str, username: str = Depends(current_username)):
+    settings = get_settings(username)
     store = RunStore(settings.runs_store_path)
     run = store.get_run(run_id)
     if run is None:
@@ -342,14 +355,25 @@ async def _post_webhook(url: str, body: bytes, headers: dict[str, str]) -> httpx
 
 
 @router.get("/ui/simulate")
-async def simulate_form(request: Request):
-    settings = get_settings()
+async def simulate_form(request: Request, username: str = Depends(current_username)):
+    # Two different Settings deliberately: the "Poll now" section acts on
+    # (and displays) the REQUESTING user's own config, since /ui/poll/trigger
+    # is genuinely per-user -- but "simulate a webhook delivery" round-trips
+    # through the real, single global /webhook/confluence endpoint (see
+    # simulate_submit and _post_webhook's docstring for why it's a real HTTP
+    # call, not an in-process one), which has no way to know which of
+    # several users a request is "for" and always resolves that one fixed
+    # bootstrap identity instead. See simulate.html for the note explaining
+    # this distinction to whoever's looking at the page.
+    poll_settings = get_settings(username)
+    webhook_settings = get_settings(get_process_config().resolved_default_user)
     return templates.TemplateResponse(
         request,
         "simulate.html",
         {
-            "default_space_key": settings.confluence_space_key,
-            "poll_labels": settings.confluence_allowed_labels_list,
+            "poll_space_key": poll_settings.confluence_space_key,
+            "poll_labels": poll_settings.confluence_allowed_labels_list,
+            "default_space_key": webhook_settings.confluence_space_key,
             "polled": request.query_params.get("polled") == "1",
             "prefill": None,
             "result": None,
@@ -359,21 +383,27 @@ async def simulate_form(request: Request):
 
 
 @router.post("/ui/poll/trigger")
-async def trigger_poll(background_tasks: BackgroundTasks):
-    """The "on demand" counterpart to the real poll loop (pipeline/poller.py,
-    started from the app's lifespan when CONFLUENCE_POLL_ENABLED is set) --
-    same poll_once() call, just fired immediately for a demo instead of
-    waiting out CONFLUENCE_POLL_INTERVAL_SECONDS. Backgrounded like the real
+async def trigger_poll(background_tasks: BackgroundTasks, username: str = Depends(current_username)):
+    """The "on demand" counterpart to the real per-user poll loop
+    (pipeline/poller.py, started from the app's lifespan) -- same
+    poll_once() call, just fired immediately for THIS user instead of
+    waiting out their own CONFLUENCE_POLL_INTERVAL_SECONDS. Unlike
+    /ui/simulate below, this one genuinely is per-user: it calls
+    build_deps/run_pipeline directly rather than round-tripping through the
+    single global /webhook/confluence endpoint. Backgrounded like the real
     webhook route, since a poll that finds several pages can take minutes.
     """
-    background_tasks.add_task(poll_once)
+    settings = get_settings(username)
+    background_tasks.add_task(poll_once, settings)
     return RedirectResponse(url="/ui/simulate?polled=1", status_code=303)
 
 
 @router.post("/ui/simulate")
-async def simulate_submit(request: Request):
+async def simulate_submit(request: Request, username: str = Depends(current_username)):
     form = await request.form()
-    settings = get_settings()
+    # See simulate_form's comment: always the bootstrap user, since this
+    # submits to the real, single global /webhook/confluence endpoint.
+    settings = get_settings(get_process_config().resolved_default_user)
 
     page_id = str(form.get("page_id") or "").strip()
     title = str(form.get("title") or "").strip()

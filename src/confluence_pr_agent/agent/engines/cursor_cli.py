@@ -1,9 +1,13 @@
 """ChangeEngine backed by the Cursor CLI (`agent`).
 
 Requires the `agent` binary on PATH (install: curl https://cursor.com/install
--fsS | bash) and CURSOR_API_KEY set in the environment. Cursor's CLI has no
-native "max turns" concept, so max_turns is translated into a wall-clock
-timeout instead (see _subprocess_utils.turns_to_timeout_seconds).
+-fsS | bash) and a Cursor API key -- passed explicitly as CURSOR_API_KEY into
+the subprocess's own env (not inherited from this process's ambient
+os.environ), since with multiple users' Settings/credentials potentially
+live in one process, ambient env can't safely stand in for per-run
+credentials. Cursor's CLI has no native "max turns" concept, so max_turns is
+translated into a wall-clock timeout instead (see
+_subprocess_utils.turns_to_timeout_seconds).
 """
 
 from __future__ import annotations
@@ -50,6 +54,9 @@ def parse_usage(stdout: str) -> dict | None:
 
 
 class CursorCliEngine:
+    def __init__(self, api_key: str = "") -> None:
+        self._api_key = api_key
+
     async def implement_change(
         self, repo_dir: Path, diff: PageDiff, max_turns: int, retry_context: str | None = None
     ) -> ChangeAgentResult:
@@ -65,9 +72,12 @@ class CursorCliEngine:
         prompt = build_combined_prompt(diff, retry_context)
         args = [CLI_BINARY, "-p", "--force", "--output-format", "json", prompt]
         timeout = turns_to_timeout_seconds(max_turns)
+        extra_env = {"CURSOR_API_KEY": self._api_key} if self._api_key else None
 
         try:
-            returncode, stdout, stderr = await run_cli(args, cwd=repo_dir, timeout_seconds=timeout)
+            returncode, stdout, stderr = await run_cli(
+                args, cwd=repo_dir, timeout_seconds=timeout, extra_env=extra_env
+            )
         except EngineTimeoutError as exc:
             return ChangeAgentResult(success=False, summary=str(exc))
 

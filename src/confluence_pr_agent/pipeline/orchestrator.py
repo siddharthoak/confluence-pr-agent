@@ -38,7 +38,7 @@ from datetime import datetime, timezone
 
 from confluence_pr_agent.agent.base import ChangeEngine
 from confluence_pr_agent.agent.factory import build_change_engine
-from confluence_pr_agent.config import Settings, get_settings
+from confluence_pr_agent.config import Settings, get_process_config, get_settings
 from confluence_pr_agent.confluence.client import ConfluenceClient
 from confluence_pr_agent.confluence.diff import compute_diff
 from confluence_pr_agent.jira.client import JiraClient
@@ -170,7 +170,14 @@ def _build_email_client(settings: Settings) -> EmailClient:
 
 
 def build_deps(settings: Settings | None = None) -> PipelineDeps:
-    settings = settings or get_settings()
+    # No settings given -- resolves to the single bootstrap/default user
+    # (config.py's ProcessConfig.resolved_default_user), not a bare global
+    # get_settings() (multi-tenant: there's no such thing anymore, every
+    # user has their own). This is what /webhook/confluence relies on (see
+    # webhook/app.py) -- it has no way to know which of several users a
+    # webhook delivery is "for", so it always resolves this one fixed
+    # identity, same as it always has.
+    settings = settings or get_settings(get_process_config().resolved_default_user)
     if settings.repo_provider != "github":
         # Fail loudly here rather than silently building a GitClient/
         # GitHubClient anyway -- REPO_PROVIDER is config surface for future

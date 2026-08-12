@@ -376,6 +376,18 @@
     <a href="/ui/runs" class="{{ 'active' if request.url.path == '/ui/runs' else '' }}">Pipeline Runs</a>
     <a href="/ui/simulate" class="{{ 'active' if request.url.path == '/ui/simulate' else '' }}">Simulate Webhook</a>
     <a href="/ui/config" class="{{ 'active' if request.url.path == '/ui/config' else '' }}">Configuration</a>
+    <!-- request.state.username is set by ui/auth.py::current_username --
+         every /ui/* route depends on it, so it's always present here.
+         Undefined (renders as nothing) only on a page that somehow
+         reached this layout without going through that dependency. The
+         auto margin on this first element pushes it and the Sign out link
+         after it together to the right edge -- neither needs its own. -->
+    {% if request.state.username %}<span style="margin-left: auto; color: var(--text-muted); font-size: 0.9rem;">{{ request.state.username }}</span>{% endif %}
+    <!-- /logout is intercepted by Caddy (see Caddyfile.example) before it
+         ever reaches this app -- it's not a route this app defines. Only
+         does anything meaningful when accessed through Caddy's Basic Auth;
+         a harmless dead link otherwise (e.g. a local `uvicorn --reload`). -->
+    <a href="/logout" style="{% if not request.state.username %}margin-left: auto;{% endif %} color: var(--text-muted);" title="Force your browser to re-prompt for Basic Auth credentials">Sign out</a>
   </nav>
   {% block content %}{% endblock %}
 </body>

@@ -5,8 +5,15 @@ venv/
 *.egg-info/
 .pytest_cache/
 .env
-data/*.json
-data/workdirs/
+# Everything under data/ is runtime state -- page-version store, run
+# history, cloned repo working dirs, and (per user, see config.py) each
+# person's own .env -- none of it belongs in version control. A single
+# `data/*.json` + `data/workdirs/` used to cover this back when it was all
+# flat under data/ directly; multi-tenancy nested it under
+# data/users/<username>/, which those two patterns don't reach (gitignore
+# glob patterns don't cross directory boundaries), so this is now the whole
+# directory, at any depth.
+data/
 .DS_Store
 
 # Real credential hashes live here once deployed -- Caddyfile.example is the

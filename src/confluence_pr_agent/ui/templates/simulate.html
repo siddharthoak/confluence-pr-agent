@@ -10,8 +10,8 @@
   <legend>Poll now</legend>
   <p class="hint" style="margin-top: 0;">
     Confluence Cloud has no self-service webhook registration (that requires building a Forge/Connect app), so
-    polling is the real trigger mechanism: this searches space
-    <strong>{{ default_space_key }}</strong> for pages
+    polling is the real trigger mechanism: this searches <strong>your own</strong> configured space
+    <strong>{{ poll_space_key }}</strong> for pages
     {% if poll_labels %}
       labeled {% for l in poll_labels %}<code>{{ l }}</code>{{ ", " if not loop.last else "" }}{% endfor %}
     {% else %}
@@ -27,6 +27,12 @@
 </fieldset>
 
 <h2 style="font-size: 1rem;">Or simulate a single-page webhook delivery</h2>
+<p class="hint" style="margin-top: 0;">
+  Unlike "Poll now" above, this always exercises the real, single
+  <code>/webhook/confluence</code> endpoint, which has no per-user identity to key off of --
+  so it always runs against the site's bootstrap/default account's configuration, not
+  necessarily your own, regardless of which user you're signed in as.
+</p>
 <form method="post" action="/ui/simulate">
   <label for="page_id">Confluence page ID <span class="hint">(required — the number in the page's URL)</span></label>
   <input type="text" name="page_id" id="page_id" required pattern="[0-9]+" placeholder="123456"

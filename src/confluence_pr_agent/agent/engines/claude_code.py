@@ -5,6 +5,7 @@ on PATH separately; the SDK does not bundle it).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from claude_agent_sdk import ClaudeAgentOptions, query
@@ -15,17 +16,27 @@ from confluence_pr_agent.models import ChangeAgentResult, PageDiff
 
 
 class ClaudeCodeEngine:
+    def __init__(self, api_key: str = "") -> None:
+        self._api_key = api_key
+
     async def implement_change(
         self, repo_dir: Path, diff: PageDiff, max_turns: int, retry_context: str | None = None
     ) -> ChangeAgentResult:
         prompt = build_user_prompt(diff, retry_context)
 
+        # Explicit env, not inherited from this process's ambient
+        # os.environ -- with multiple users' credentials potentially live
+        # in one process, ambient env can't safely stand in for per-run
+        # credentials. Starts from a copy of the real environment (PATH,
+        # etc. -- the `claude` CLI subprocess still needs those) with just
+        # ANTHROPIC_API_KEY overridden to this run's own key.
         options = ClaudeAgentOptions(
             cwd=str(repo_dir),
             permission_mode="acceptEdits",
             allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
             system_prompt=SYSTEM_PROMPT,
             max_turns=max_turns,
+            env={**os.environ, "ANTHROPIC_API_KEY": self._api_key} if self._api_key else dict(os.environ),
         )
 
         log_lines: list[str] = []

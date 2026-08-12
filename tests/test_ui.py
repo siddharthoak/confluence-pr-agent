@@ -9,39 +9,34 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from confluence_pr_agent.config import get_settings
+from confluence_pr_agent.config import get_process_config, get_settings
 from confluence_pr_agent.storage.run_store import RunStore
 from confluence_pr_agent.ui import routes as ui_routes
-from confluence_pr_agent.ui.config_fields import CONFIG_FIELDS
 from confluence_pr_agent.webhook.app import app
 
 
 @pytest.fixture(autouse=True)
 def _isolated_env_file(tmp_path, monkeypatch):
-    """Point the config UI and DATA_DIR at a throwaway directory instead of
-    the real project's .env / data/runs.json -- otherwise every test in this
-    module would read and write the actual project's live state.
-
-    Also snapshots/restores every CONFIG_FIELDS env var: save_config()
-    writes straight to os.environ by design (see routes.py), which
-    monkeypatch.setenv can't intercept since the mutation happens inside the
-    route, not the test -- without this, config saved in one test would
-    leak into every test that runs after it in the same process.
+    """Points DATA_DIR at a throwaway directory and gives every test a
+    fixed DEFAULT_USER identity ("testuser") -- otherwise every test in
+    this module would read/write the real project's live data/users/*/
+    state. INTERNAL_SHARED_SECRET is explicitly blanked (not just left
+    unset) so current_username's secret check is skipped, same as real
+    local dev without Caddy in front -- explicit matters here because the
+    real top-level .env has a real secret in it, and monkeypatch.setenv's
+    os.environ value only wins over that file's value if it's actually
+    set to something (pydantic-settings' env source outranks its
+    dotenv-file source, but only for keys os.environ actually has).
     """
-    env_path = tmp_path / ".env"
-    monkeypatch.setattr(ui_routes, "ENV_PATH", env_path)
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
-    snapshot = {f.key: os.environ.get(f.key) for f in CONFIG_FIELDS}
+    monkeypatch.setenv("DEFAULT_USER", "testuser")
+    monkeypatch.setenv("INTERNAL_SHARED_SECRET", "")
 
+    get_process_config.cache_clear()
     get_settings.cache_clear()
-    yield env_path
+    yield get_process_config().user_env_path("testuser")
+    get_process_config.cache_clear()
     get_settings.cache_clear()
-
-    for key, value in snapshot.items():
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
 
 
 @pytest.fixture
@@ -150,7 +145,7 @@ def test_blank_number_field_does_not_corrupt_env_file(client, _isolated_env_file
     # Settings() must still parse cleanly after the save -- the actual
     # symptom of the original bug.
     get_settings.cache_clear()
-    get_settings()
+    get_settings("testuser")
 
 
 def test_non_numeric_value_for_a_number_field_is_rejected(client, _isolated_env_file):
@@ -194,7 +189,7 @@ def test_status_dropdown_uses_readable_labels_not_raw_values(client):
 def test_ignored_run_renders_with_reason_not_as_a_red_error(client):
     from confluence_pr_agent.models import RunRecord
 
-    store = RunStore(get_settings().runs_store_path)
+    store = RunStore(get_settings("testuser").runs_store_path)
     store.upsert_run(
         RunRecord(
             run_id="ignored-1",
@@ -222,7 +217,7 @@ def test_ignored_run_renders_with_reason_not_as_a_red_error(client):
 
 
 def test_runs_list_renders_a_recorded_run(client):
-    settings = get_settings()
+    settings = get_settings("testuser")
     store = RunStore(settings.runs_store_path)
     from confluence_pr_agent.models import RunRecord
 
@@ -286,7 +281,7 @@ def _seed_runs(store) -> None:
 
 
 def test_runs_list_filters_by_engine(client):
-    _seed_runs(RunStore(get_settings().runs_store_path))
+    _seed_runs(RunStore(get_settings("testuser").runs_store_path))
 
     resp = client.get("/ui/runs", params={"engine": "gemini"})
 
@@ -295,7 +290,7 @@ def test_runs_list_filters_by_engine(client):
 
 
 def test_runs_list_filters_by_status(client):
-    _seed_runs(RunStore(get_settings().runs_store_path))
+    _seed_runs(RunStore(get_settings("testuser").runs_store_path))
 
     resp = client.get("/ui/runs", params={"status": "opened_pr"})
 
@@ -304,7 +299,7 @@ def test_runs_list_filters_by_status(client):
 
 
 def test_runs_list_filters_by_date_range(client):
-    _seed_runs(RunStore(get_settings().runs_store_path))
+    _seed_runs(RunStore(get_settings("testuser").runs_store_path))
 
     resp = client.get("/ui/runs", params={"date_from": "2026-02-01"})
 
@@ -313,7 +308,7 @@ def test_runs_list_filters_by_date_range(client):
 
 
 def test_runs_list_shows_no_match_message_when_filters_exclude_everything(client):
-    _seed_runs(RunStore(get_settings().runs_store_path))
+    _seed_runs(RunStore(get_settings("testuser").runs_store_path))
 
     resp = client.get("/ui/runs", params={"engine": "codex"})
 
@@ -323,7 +318,7 @@ def test_runs_list_shows_no_match_message_when_filters_exclude_everything(client
 def test_runs_list_shows_a_running_run_without_a_duration(client):
     from confluence_pr_agent.models import RunRecord
 
-    store = RunStore(get_settings().runs_store_path)
+    store = RunStore(get_settings("testuser").runs_store_path)
     store.upsert_run(
         RunRecord(
             run_id="run-in-progress",
@@ -349,7 +344,7 @@ def test_runs_list_shows_a_running_run_without_a_duration(client):
 def test_run_detail_page_shows_in_progress_banner_for_a_running_run(client):
     from confluence_pr_agent.models import RunRecord
 
-    store = RunStore(get_settings().runs_store_path)
+    store = RunStore(get_settings("testuser").runs_store_path)
     store.upsert_run(
         RunRecord(
             run_id="run-in-progress",
@@ -372,7 +367,7 @@ def test_run_detail_page_shows_in_progress_banner_for_a_running_run(client):
 
 
 def test_delete_run_removes_it_from_the_list(client):
-    store = RunStore(get_settings().runs_store_path)
+    store = RunStore(get_settings("testuser").runs_store_path)
     _seed_runs(store)
 
     resp = client.post("/ui/runs/run-claude-ok/delete", follow_redirects=False)
@@ -384,7 +379,7 @@ def test_delete_run_removes_it_from_the_list(client):
 
 
 def test_delete_all_runs_clears_everything(client):
-    store = RunStore(get_settings().runs_store_path)
+    store = RunStore(get_settings("testuser").runs_store_path)
     _seed_runs(store)
 
     resp = client.post("/ui/runs/delete-all", follow_redirects=False)
@@ -394,7 +389,7 @@ def test_delete_all_runs_clears_everything(client):
 
 
 def test_run_detail_page_shows_full_record_including_usage_and_raw_log(client):
-    settings = get_settings()
+    settings = get_settings("testuser")
     store = RunStore(settings.runs_store_path)
     from confluence_pr_agent.models import RunRecord
 
@@ -452,7 +447,7 @@ def test_run_detail_page_shows_full_record_including_usage_and_raw_log(client):
 def test_run_detail_page_shows_progress_heading_and_active_stage_when_running(client):
     from confluence_pr_agent.models import RunRecord
 
-    store = RunStore(get_settings().runs_store_path)
+    store = RunStore(get_settings("testuser").runs_store_path)
     store.upsert_run(
         RunRecord(
             run_id="running-detail",
@@ -528,8 +523,13 @@ def test_simulate_posts_signed_payload_with_correct_headers(client, monkeypatch)
     (not httpx.ASGITransport) and thus not something to fake a live server
     for in a unit test.
     """
-    monkeypatch.setenv("CONFLUENCE_WEBHOOK_SECRET", "shh")
-    get_settings.cache_clear()
+    # /ui/simulate always resolves the bootstrap/default user's Settings
+    # (see routes.py::simulate_submit) -- which is "testuser" here too,
+    # since _isolated_env_file sets DEFAULT_USER=testuser. Settings no
+    # longer reads os.environ at all (see config.py), so the secret has to
+    # actually be saved through the real config-write path, not
+    # monkeypatch.setenv.
+    client.post("/ui/config", data={"CONFLUENCE_WEBHOOK_SECRET": "shh"})
 
     captured = {}
 
@@ -556,8 +556,6 @@ def test_simulate_posts_signed_payload_with_correct_headers(client, monkeypatch)
 
     expected_signature = "sha256=" + hmac.new(b"shh", captured["body"], hashlib.sha256).hexdigest()
     assert captured["headers"]["X-Hub-Signature-256"] == expected_signature
-
-    get_settings.cache_clear()
 
 
 def test_simulate_omits_signature_header_when_no_secret_configured(client, monkeypatch):

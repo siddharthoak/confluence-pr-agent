@@ -18,17 +18,17 @@ def build_change_engine(settings: Settings) -> ChangeEngine:
     if normalized == "claude_code":
         from confluence_pr_agent.agent.engines.claude_code import ClaudeCodeEngine
 
-        return ClaudeCodeEngine()
+        return ClaudeCodeEngine(api_key=settings.anthropic_api_key)
 
     if normalized == "cursor":
         from confluence_pr_agent.agent.engines.cursor_cli import CursorCliEngine
 
-        return CursorCliEngine()
+        return CursorCliEngine(api_key=settings.cursor_api_key)
 
     if normalized == "copilot":
         from confluence_pr_agent.agent.engines.copilot_cli import CopilotCliEngine
 
-        return CopilotCliEngine()
+        return CopilotCliEngine(github_token=settings.github_token)
 
     if normalized == "codex":
         from confluence_pr_agent.agent.engines.codex_cli import CodexCliEngine

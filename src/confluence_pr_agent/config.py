@@ -1,30 +1,103 @@
-"""Central configuration, loaded from environment variables / .env."""
+"""Configuration, in two tiers.
+
+`ProcessConfig` is read once at import from the real process environment /
+the container's own top-level `.env` -- DATA_DIR (base directory), LOG_LEVEL,
+INTERNAL_SHARED_SECRET (checked against the header Caddy forwards after
+Basic Auth -- see ui/routes.py::current_username and Caddyfile.example),
+DEFAULT_USER (the single-tenant bootstrap identity `/webhook/confluence`
+resolves to, and a local `uvicorn --reload` dev fallback when there's no
+Caddy in front to forward a real identity). Everything here is genuinely
+process-wide; there's only one running server.
+
+`Settings` is everything else (Confluence, repo, change engine, judge,
+Jira, email, polling) -- one instance PER AUTHENTICATED USER (see
+get_settings below), loaded from that user's own
+`data/users/<username>/.env` and nothing else. `Settings` deliberately
+never reads os.environ at all (see settings_customise_sources) -- with
+N users' Settings potentially constructed in the same process, falling
+back to process-wide os.environ would silently leak one user's values into
+another's. This is the same bug class this project hit once already (a
+real .env value leaked into pytest's Settings() construction mid-session,
+silently breaking unrelated tests) before being isolated at the test level
+with monkeypatch.delenv; excluding the env source at the model level fixes
+it permanently for every caller, not just tests.
+"""
 
 from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
 
-from dotenv import load_dotenv
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
-# Populate the real process environment too (not just this module's Settings
-# object) -- every change engine shells out to its own CLI subprocess, which
-# reads its API key (ANTHROPIC_API_KEY / CURSOR_API_KEY / GITHUB_TOKEN)
-# straight from os.environ, not from this Settings object.
-#
-# override=True is deliberate: .env (and the /ui/config form that writes to
-# it) is meant to be the authoritative source of truth for this service.
-# Without it, a stale environment variable from the parent shell would
-# silently win over a value someone just saved in the UI -- pydantic-settings
-# has the same real-env-wins-over-.env-file default, so this also covers it,
-# since Settings() reads os.environ *after* this line has already run.
-load_dotenv(override=True)
+DEFAULT_USER_FALLBACK = "default"  # used when DEFAULT_USER is unset, so the webhook path never hard-fails
+
+
+class ProcessConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    data_dir: str = Field(default="./data")
+    log_level: str = Field(default="INFO")
+    webhook_host: str = Field(default="0.0.0.0")
+    webhook_port: int = Field(default=8000)
+    internal_shared_secret: str = Field(default="")
+    default_user: str = Field(default="")
+
+    @property
+    def base_data_dir_path(self) -> Path:
+        path = Path(self.data_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def users_dir_path(self) -> Path:
+        path = self.base_data_dir_path / "users"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def user_dir_path(self, username: str) -> Path:
+        """Creating this on every call is what auto-provisions a brand new
+        username the first time anything asks for their directory -- no
+        separate "create user" step beyond adding them to Caddy's
+        basic_auth. The .env file inside it is created lazily by
+        ui/routes.py::save_config on first save, same as today's
+        single-tenant behavior.
+        """
+        path = self.users_dir_path / username
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def user_env_path(self, username: str) -> Path:
+        return self.user_dir_path(username) / ".env"
+
+    @property
+    def resolved_default_user(self) -> str:
+        return self.default_user.strip() or DEFAULT_USER_FALLBACK
+
+
+@lru_cache
+def get_process_config() -> ProcessConfig:
+    return ProcessConfig()
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=None, extra="ignore")
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # No env_settings -- see module docstring. init_settings still wins
+        # (get_settings() below always passes _env_file/data_dir
+        # explicitly), then this user's own dotenv file, then hardcoded
+        # field defaults. Never ambient os.environ.
+        return (init_settings, dotenv_settings, file_secret_settings)
 
     # Confluence
     confluence_base_url: str = Field(default="https://example.atlassian.net/wiki")
@@ -69,6 +142,12 @@ class Settings(BaseSettings):
 
     # Change engine (code-writing backend) -- one of:
     # claude_code | cursor | copilot | codex | gemini | antigravity
+    # Deliberately per-user like everything else here, even though the
+    # engine's CLI binary is a single deployment-wide choice baked into the
+    # image at build time (--build-arg CHANGE_AGENT_ENGINE=...) -- a user
+    # picking a value the image doesn't have installed just fails at
+    # subprocess-spawn time with a clear "not found" error (see each
+    # engine's own PATH check), same as it would today.
     change_agent_engine: str = Field(default="claude_code")
     change_agent_max_turns: int = Field(default=30)
     # Self-correction loop: if TARGET_REPO_TEST_COMMAND fails, the change
@@ -80,7 +159,7 @@ class Settings(BaseSettings):
     cursor_api_key: str = Field(default="")  # cursor engine
     openai_api_key: str = Field(default="")  # codex engine
     gemini_api_key: str = Field(default="")  # gemini engine
-    # copilot engine reuses github_token below; antigravity is OAuth-only (no key)
+    # copilot engine reuses github_token above; antigravity is OAuth-only (no key)
 
     # LLM-as-judge review gate: after tests pass but before a PR is opened,
     # an independent LLM call reviews the actual code diff against the spec
@@ -97,9 +176,12 @@ class Settings(BaseSettings):
     # if the story from a previous still-open run for this page is still
     # open, commented on instead of duplicated) once a real change is
     # confirmed, then commented on again with either the PR link or an
-    # explanation of what went wrong. Reuses judge_provider/judge_model for
+    # explanation of what went wrong. Prefers judge_provider/judge_model for
     # the LLM call that writes the story's description/AC -- see
-    # jira/story_writer.py -- rather than a separate provider setting.
+    # jira/story_writer.py -- falling back to gemini_api_key independently
+    # of judge_provider (the judge is optional and often unconfigured/
+    # broken; the change engine's own key is far more likely to actually
+    # work), then a plain-text summary if neither is available.
     # Every Jira call is fail-open: an outage or missing config never blocks
     # or fails the pipeline, same as email/labels/the judge.
     jira_enabled: bool = Field(default=False)
@@ -122,11 +204,13 @@ class Settings(BaseSettings):
     email_from_address: str = Field(default="confluence-pr-agent@example.com")
     email_to_addresses: str = Field(default="team@example.com")
 
-    # Service
+    # Always overridden by get_settings() below to this user's own
+    # directory -- present as a field (rather than computed purely outside
+    # the model) only so data_dir_path/workdirs_path/page_store_path/
+    # runs_store_path keep working unchanged. A value in this user's own
+    # .env can't redirect it elsewhere: init_settings (get_settings' kwarg)
+    # outranks dotenv_settings in settings_customise_sources above.
     data_dir: str = Field(default="./data")
-    webhook_host: str = Field(default="0.0.0.0")
-    webhook_port: int = Field(default=8000)
-    log_level: str = Field(default="INFO")
 
     @property
     def email_to_list(self) -> list[str]:
@@ -158,5 +242,16 @@ class Settings(BaseSettings):
 
 
 @lru_cache
-def get_settings() -> Settings:
-    return Settings()
+def get_settings(username: str) -> Settings:
+    process = get_process_config()
+    user_dir = process.user_dir_path(username)
+    return Settings(_env_file=str(user_dir / ".env"), data_dir=str(user_dir))
+
+
+def clear_settings_cache() -> None:
+    """Invalidates every cached per-user Settings, not just one user's --
+    matches today's single-tenant get_settings.cache_clear() behavior.
+    Harmless: the next request for any user just rebuilds their own Settings
+    from their own file.
+    """
+    get_settings.cache_clear()
