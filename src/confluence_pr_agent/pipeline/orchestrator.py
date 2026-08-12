@@ -255,6 +255,7 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                 target_repo=settings.target_repo,
                 status="running",
                 current_stage=stage,
+                max_attempts=max(1, settings.change_agent_max_attempts),
             )
         )
 
@@ -338,6 +339,7 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                 judge_concerns=judge.concerns if judge else [],
                 judge_criteria=judge.criteria if judge else [],
                 attempts=result.attempts,
+                max_attempts=max(1, settings.change_agent_max_attempts),
                 jira_issue_key=result.jira_issue.key if result.jira_issue else None,
                 jira_issue_url=result.jira_issue.url if result.jira_issue else None,
                 jira_reused=result.jira_reused,

@@ -39,6 +39,28 @@ ENGINE_CREDENTIAL_BY_ENGINE = {
     "antigravity": None,  # OAuth-only
 }
 
+# Curated, known-good model names per LLM Judge provider -- a free-text
+# model field means a typo (or a model that's been retired) only surfaces as
+# a real API call failing at pipeline run time, silently skipping the review
+# (see judge/factory.py::judge_configured -- the whole point of that
+# fail-open behavior is nobody's PR gets blocked by it, which also means a
+# typo here is easy to never notice). A dropdown makes that class of mistake
+# impossible. Empty string is always a valid choice ("provider default" --
+# see each provider's own DEFAULT_MODEL in judge/providers/*.py).
+JUDGE_MODEL_OPTIONS_BY_PROVIDER = {
+    "anthropic": ["", "claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001"],
+    "openai": ["", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini", "o3", "o3-mini"],
+    # Deliberately a *different* Gemini model list than what the `gemini`
+    # change engine's own CLI uses internally for code changes -- the whole
+    # point of the judge being a separate provider selection is a second
+    # opinion, not the same model grading its own work (see judge/factory.py
+    # module docstring). gemini-2.5-pro (the judge default) is a reasonable,
+    # deliberately heavier choice than gemini-2.5-flash (the Jira story
+    # writer's own default, see jira/story_writer.py) for exactly that
+    # reason.
+    "gemini": ["", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"],
+}
+
 # Same show/hide pattern as ENGINE_CREDENTIAL_BY_ENGINE, for GITHUB_TOKEN --
 # it's a github-specific credential, so it shouldn't stay visible (and
 # suggest it's still relevant) when a different, unimplemented provider is
@@ -134,7 +156,10 @@ CONFIG_FIELDS: list[ConfigField] = [
         "OPENAI_API_KEY", "OpenAI API key (codex)", "Change engine", secret=True,
         help_text="Also used by the LLM Judge review gate below when its provider is set to OpenAI.",
     ),
-    ConfigField("GEMINI_API_KEY", "Gemini API key (gemini)", "Change engine", secret=True),
+    ConfigField(
+        "GEMINI_API_KEY", "Gemini API key (gemini)", "Change engine", secret=True,
+        help_text="Also used by the LLM Judge review gate below when its provider is set to Gemini.",
+    ),
     # LLM judge
     ConfigField(
         "JUDGE_ENABLED", "LLM Judge review gate", "LLM Judge", input_type="select", options=["true", "false"],
@@ -148,12 +173,18 @@ CONFIG_FIELDS: list[ConfigField] = [
         ),
     ),
     ConfigField(
-        "JUDGE_PROVIDER", "LLM Judge provider", "LLM Judge", input_type="select", options=["anthropic", "openai"],
-        help_text="Uses the matching API key above (Anthropic or OpenAI) -- not tied to CHANGE_AGENT_ENGINE.",
+        "JUDGE_PROVIDER", "LLM Judge provider", "LLM Judge", input_type="select",
+        options=["anthropic", "openai", "gemini"],
+        help_text=(
+            "Uses the matching API key above (Anthropic, OpenAI, or Gemini) -- not tied to "
+            "CHANGE_AGENT_ENGINE, so picking Gemini here reviews with a different model than a "
+            "gemini change engine used to write the code, not the same one grading its own work."
+        ),
     ),
     ConfigField(
-        "JUDGE_MODEL", "LLM Judge model", "LLM Judge",
-        placeholder="blank = provider default (claude-sonnet-5 / gpt-4.1)",
+        "JUDGE_MODEL", "LLM Judge model", "LLM Judge", input_type="select",
+        options=JUDGE_MODEL_OPTIONS_BY_PROVIDER["anthropic"],
+        help_text="Options match the provider selected above. Blank = that provider's own default.",
     ),
     # Jira
     ConfigField(

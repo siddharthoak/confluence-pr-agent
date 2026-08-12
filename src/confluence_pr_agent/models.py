@@ -198,6 +198,7 @@ class RunRecord:
     judge_criteria: list[JudgeCriterion] = field(default_factory=list)
     spec_diff: str | None = None  # the Confluence diff text the agent was actually prompted with
     attempts: int = 1  # how many ai_agent/run_tests cycles this run took -- see agent_max_attempts
+    max_attempts: int = 1  # the CHANGE_AGENT_MAX_ATTEMPTS ceiling in effect for this run
     jira_issue_key: str | None = None
     jira_issue_url: str | None = None
     jira_reused: bool = False  # true if an existing still-open story was commented on rather than a new one created

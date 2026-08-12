@@ -4,6 +4,7 @@ import pytest
 
 from confluence_pr_agent.judge.factory import build_judge, judge_configured
 from confluence_pr_agent.judge.providers.anthropic_judge import AnthropicJudge
+from confluence_pr_agent.judge.providers.gemini_judge import GeminiJudge
 from confluence_pr_agent.judge.providers.openai_judge import OpenAIJudge
 
 
@@ -13,17 +14,19 @@ from confluence_pr_agent.judge.providers.openai_judge import OpenAIJudge
         ("anthropic", AnthropicJudge),
         ("Anthropic", AnthropicJudge),  # case-insensitive
         ("openai", OpenAIJudge),
+        ("gemini", GeminiJudge),
     ],
 )
 def test_build_judge_dispatches_by_name(name, expected_type, settings):
     settings.judge_provider = name
-    # AnthropicJudge/OpenAIJudge both require a non-empty key just to
-    # construct their underlying client -- settings.anthropic_api_key is
-    # already set by the shared fixture, but openai_api_key isn't (this
-    # test previously only passed for "openai" because a real developer
-    # .env's OPENAI_API_KEY was silently leaking through the old, less
-    # isolated fixture).
+    # AnthropicJudge/OpenAIJudge/GeminiJudge all require a non-empty key
+    # just to construct their underlying client -- settings.anthropic_api_key
+    # is already set by the shared fixture, but openai_api_key/gemini_api_key
+    # aren't (this test previously only passed for "openai" because a real
+    # developer .env's OPENAI_API_KEY was silently leaking through the old,
+    # less isolated fixture).
     settings.openai_api_key = "test-openai-key"
+    settings.gemini_api_key = "test-gemini-key"
     assert isinstance(build_judge(settings), expected_type)
 
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 from confluence_pr_agent.config import Settings
 from confluence_pr_agent.judge.base import ChangeJudge
 
-_PROVIDERS = ("anthropic", "openai")
+_PROVIDERS = ("anthropic", "openai", "gemini")
 
 # Which Settings field holds the API key for each provider -- used by
 # judge_configured() below so the orchestrator can skip the review (instead
@@ -22,6 +22,7 @@ _PROVIDERS = ("anthropic", "openai")
 _CREDENTIAL_FIELD = {
     "anthropic": "anthropic_api_key",
     "openai": "openai_api_key",
+    "gemini": "gemini_api_key",
 }
 
 
@@ -37,6 +38,11 @@ def build_judge(settings: Settings) -> ChangeJudge:
         from confluence_pr_agent.judge.providers.openai_judge import DEFAULT_MODEL, OpenAIJudge
 
         return OpenAIJudge(api_key=settings.openai_api_key, model=settings.judge_model or DEFAULT_MODEL)
+
+    if provider == "gemini":
+        from confluence_pr_agent.judge.providers.gemini_judge import DEFAULT_MODEL, GeminiJudge
+
+        return GeminiJudge(api_key=settings.gemini_api_key, model=settings.judge_model or DEFAULT_MODEL)
 
     raise ValueError(f"Unknown JUDGE_PROVIDER '{settings.judge_provider}' -- expected one of {_PROVIDERS}")
 

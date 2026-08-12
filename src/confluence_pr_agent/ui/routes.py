@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -30,6 +31,7 @@ from confluence_pr_agent.ui.config_fields import (
     ALL_ENGINES,
     CONFIG_FIELDS,
     ENGINE_CREDENTIAL_BY_ENGINE,
+    JUDGE_MODEL_OPTIONS_BY_PROVIDER,
     REPO_CREDENTIAL_BY_PROVIDER,
 )
 from confluence_pr_agent.ui.diff_view import render_diff_html
@@ -166,9 +168,18 @@ def _current_env_values(username: str) -> dict[str, str]:
 
 def _config_context(username: str, saved: bool = False, error: str | None = None) -> dict:
     values = _current_env_values(username)
+    current_judge_provider = values.get("JUDGE_PROVIDER", "").lower()
     groups: dict[str, list[dict]] = {}
     for f in CONFIG_FIELDS:
         current = values.get(f.key, "")
+        # JUDGE_MODEL's option list depends on JUDGE_PROVIDER (each provider
+        # has its own model names) -- this seeds the right list for the
+        # user's *current* provider on first paint; config.html's JS swaps
+        # it live if they change the provider dropdown without reloading.
+        if f.key == "JUDGE_MODEL":
+            f = replace(
+                f, options=JUDGE_MODEL_OPTIONS_BY_PROVIDER.get(current_judge_provider, f.options)
+            )
         groups.setdefault(f.group, []).append(
             {
                 "field": f,
@@ -182,6 +193,7 @@ def _config_context(username: str, saved: bool = False, error: str | None = None
         "error": error,
         "engine_credential_by_engine": ENGINE_CREDENTIAL_BY_ENGINE,
         "repo_credential_by_provider": REPO_CREDENTIAL_BY_PROVIDER,
+        "judge_model_options_by_provider": JUDGE_MODEL_OPTIONS_BY_PROVIDER,
     }
 
 

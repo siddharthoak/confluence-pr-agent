@@ -32,7 +32,7 @@
         {% if f.input_type == "select" %}
           <select name="{{ f.key }}" id="{{ f.key }}">
             {% for opt in f.options %}
-              <option value="{{ opt }}" {% if item.display_value == opt %}selected{% endif %}>{{ opt }}</option>
+              <option value="{{ opt }}" {% if item.display_value == opt %}selected{% endif %}>{{ opt if opt else "(provider default)" }}</option>
             {% endfor %}
           </select>
         {% elif f.input_type == "taglist" %}
@@ -63,7 +63,31 @@
 <script>
   const ENGINE_CREDENTIAL_BY_ENGINE = {{ engine_credential_by_engine | tojson }};
   const REPO_CREDENTIAL_BY_PROVIDER = {{ repo_credential_by_provider | tojson }};
+  const JUDGE_MODEL_OPTIONS_BY_PROVIDER = {{ judge_model_options_by_provider | tojson }};
   const ACTIVE_TAB_STORAGE_KEY = "confluence-pr-agent:config-tab";
+
+  // Rebuilds the LLM Judge model dropdown to match whichever provider is
+  // currently selected, instead of leaving it free text -- a typo'd model
+  // name only ever surfaces as a real API call failing at pipeline run
+  // time (see judge/factory.py), silently skipping the review since that
+  // failure is deliberately fail-open. Preserves the current selection if
+  // it's still valid for the new provider (e.g. reloading with the same
+  // provider); otherwise falls back to "(provider default)".
+  function syncJudgeModelOptions() {
+    const providerSelect = document.getElementById("JUDGE_PROVIDER");
+    const modelSelect = document.getElementById("JUDGE_MODEL");
+    if (!providerSelect || !modelSelect) return;
+    const options = JUDGE_MODEL_OPTIONS_BY_PROVIDER[providerSelect.value] || [""];
+    const previousValue = modelSelect.value;
+    modelSelect.innerHTML = "";
+    options.forEach((opt) => {
+      const el = document.createElement("option");
+      el.value = opt;
+      el.textContent = opt || "(provider default)";
+      modelSelect.appendChild(el);
+    });
+    modelSelect.value = options.includes(previousValue) ? previousValue : "";
+  }
 
   function syncEngineFields() {
     const select = document.getElementById("CHANGE_AGENT_ENGINE");
@@ -184,6 +208,8 @@
     syncRepoFields();
     const repoSelect = document.getElementById("REPO_PROVIDER");
     if (repoSelect) repoSelect.addEventListener("change", syncRepoFields);
+    const judgeProviderSelect = document.getElementById("JUDGE_PROVIDER");
+    if (judgeProviderSelect) judgeProviderSelect.addEventListener("change", syncJudgeModelOptions);
     initTagLists();
   });
 </script>
