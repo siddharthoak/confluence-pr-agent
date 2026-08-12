@@ -12,7 +12,7 @@
 # every step that's already done and just rebuilds+restarts the containers.
 #
 # To add another person's login afterward (no need to re-run this script):
-#   ./scripts/ec2/add-user.sh <username>
+#   ./scripts/add-caddy-user.sh <username>
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -31,5 +31,5 @@ Still worth doing, if you haven't already:
     data/users/<DEFAULT_USER>/.env directly (see .env's DEFAULT_USER value).
   - Confirm DNS for DOMAIN (in .env) actually points at this box's public
     IP -- Caddy needs that to get a real HTTPS certificate.
-  - Add teammates: ./scripts/ec2/add-user.sh <username>
+  - Add teammates: ./scripts/add-caddy-user.sh <username>
 EOF

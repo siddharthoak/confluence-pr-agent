@@ -9,6 +9,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi.responses import RedirectResponse
 
 from confluence_pr_agent.config import get_process_config, get_settings
 from confluence_pr_agent.pipeline.orchestrator import run_pipeline
@@ -43,6 +44,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(ui_router)
+
+
+@app.get("/")
+async def root() -> RedirectResponse:
+    # No route existed for the bare path before this -- Caddy's Basic Auth
+    # gate covers "/" too (its catch-all handle block), so a successful
+    # login landed on a 404 with nothing else to do. /ui itself already
+    # redirects on to /ui/runs (see ui/routes.py::ui_home); this just
+    # extends that same landing behavior to the site root.
+    return RedirectResponse(url="/ui")
 
 
 @app.get("/healthz")

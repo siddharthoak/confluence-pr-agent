@@ -2,7 +2,8 @@
 # Sets up Caddyfile from Caddyfile.example and replaces its placeholder
 # login with a real one (bcrypt-hashed, never stored in plaintext). Safe to
 # re-run: if Caddyfile already has a real hash in it (the placeholder is
-# gone), this is a no-op -- use add-user.sh to add more logins afterward.
+# gone), this is a no-op -- use ../add-caddy-user.sh to add more logins
+# afterward.
 #
 # Non-interactive use: export CADDY_ADMIN_USER / CADDY_ADMIN_PASSWORD
 # before running this script to skip the prompts. (Not CADDY_USERNAME /
@@ -19,7 +20,7 @@ fi
 
 if ! grep -q "REPLACE_WITH_A_REAL_HASH_FROM_CADDY_HASH_PASSWORD" Caddyfile; then
   echo "[02] Caddyfile already has a real login configured -- skipping."
-  echo "     Run scripts/ec2/add-user.sh to add another person."
+  echo "     Run scripts/add-caddy-user.sh to add another person."
   exit 0
 fi
 

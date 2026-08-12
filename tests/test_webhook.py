@@ -48,6 +48,16 @@ def test_healthz():
     assert resp.json() == {"status": "ok"}
 
 
+def test_root_redirects_to_ui():
+    """No route existed for the bare "/" before -- a successful Caddy Basic
+    Auth login (its catch-all handle block covers "/" too) landed on a 404
+    with nothing else to do."""
+    client = TestClient(webhook_app_module.app, follow_redirects=False)
+    resp = client.get("/")
+    assert resp.status_code in (302, 307)
+    assert resp.headers["location"] == "/ui"
+
+
 def test_webhook_accepts_valid_payload(stub_pipeline, load_fixture):
     client = TestClient(webhook_app_module.app)
     payload = load_fixture("confluence_webhook_payload.json")
