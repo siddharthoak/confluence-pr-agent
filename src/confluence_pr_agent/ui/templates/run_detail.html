@@ -17,6 +17,12 @@
   <div class="banner" style="background: rgba(91,156,230,0.12); border-color: rgba(91,156,230,0.35); color: var(--accent-blue);">
     This run is still in progress. Refresh to check for an update — a real agentic engine can take several minutes.
   </div>
+  {% elif run.status == "judge_rejected" and run.pr_url %}
+  <div class="banner" style="background: var(--warning-bg); border-color: var(--warning-border); color: var(--warning-text);">
+    The LLM judge found at least one criterion clearly unmet — this PR still opened automatically
+    as a <strong>draft</strong>, flagged for review, so nothing is lost. See the rubric below for
+    specifics, then fix in place on the branch or close it.
+  </div>
   {% endif %}
 
   <fieldset>
@@ -34,6 +40,8 @@
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8.5L6.2 11.5L13 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           {% elif step.state == "failed" %}
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2L12 12M12 2L2 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          {% elif step.state == "warning" %}
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 4.5V8M7 10.2V10.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           {% elif step.state == "active" %}
             <span class="flow-pulse-dot"></span>
           {% elif step.state == "skipped" %}
@@ -58,7 +66,10 @@
         {% if run.status != "running" %}<tr><th>Finished</th><td>{{ run.finished_at }}</td></tr>{% endif %}
         <tr><th>Confluence page</th><td>{% if run.confluence_url %}<a href="{{ run.confluence_url }}" target="_blank" rel="noopener">{{ run.page_title or run.page_id }}</a>{% else %}{{ run.page_id }}{% endif %}</td></tr>
         <tr><th>Target repo</th><td>{{ run.target_repo }}</td></tr>
-        <tr><th>Pull request</th><td>{% if run.pr_url %}<a class="pr-link" href="{{ run.pr_url }}" target="_blank" rel="noopener">#{{ run.pr_number }} &rarr;</a>{% else %}&mdash;{% endif %}</td></tr>
+        {% if run.attempts and run.attempts > 1 %}
+        <tr><th>Attempts</th><td>{{ run.attempts }} <span class="hint" style="display: inline;">(tests failed and the agent retried with the failure fed back)</span></td></tr>
+        {% endif %}
+        <tr><th>Pull request</th><td>{% if run.pr_url %}<a class="pr-link" href="{{ run.pr_url }}" target="_blank" rel="noopener">#{{ run.pr_number }} &rarr;</a>{% if run.pr_draft %} <span class="badge badge-warning">draft</span>{% endif %}{% if run.reused_pr %} <span class="hint" style="display: inline;">(updated an existing open PR instead of opening a new one)</span>{% endif %}{% else %}&mdash;{% endif %}</td></tr>
         <tr><th>Email</th><td>{% if run.email_sent %}<span style="color: var(--success-text);">sent</span>{% elif run.email_error %}<span style="color: var(--text-muted);">not sent &mdash; {{ run.email_error }}</span>{% else %}&mdash;{% endif %}</td></tr>
         {% if run.error and run.status == "ignored" %}
           <tr><th>Reason</th><td style="color: var(--text-muted);">{{ run.error }}</td></tr>
@@ -91,9 +102,38 @@
   {% if run.judge_verdict %}
   <fieldset>
     <legend>LLM Judge Review</legend>
-    <p style="margin: 0 0 0.6rem;">
-      <span class="badge badge-{{ 'opened_pr' if run.judge_verdict == 'approved' else 'judge_rejected' if run.judge_verdict == 'rejected' else 'no_change_detected' }}">{{ run.judge_verdict | capitalize }}</span>
+    <p style="margin: 0 0 0.9rem;">
+      {% if run.judge_verdict == "approved" %}
+        <span class="badge badge-opened_pr">Approved</span>
+      {% elif run.judge_verdict == "approved_with_warnings" %}
+        <span class="badge badge-warning">Approved (with warnings)</span>
+      {% elif run.judge_verdict == "rejected" %}
+        <span class="badge badge-judge_rejected">Rejected</span>
+      {% else %}
+        <span class="badge badge-no_change_detected">Skipped</span>
+      {% endif %}
     </p>
+    {% if run.judge_criteria %}
+    <table style="margin-bottom: 0.9rem;">
+      <thead>
+        <tr><th style="width: 220px;">Criterion</th><th style="width: 110px;">Assessment</th><th>Note</th></tr>
+      </thead>
+      <tbody>
+        {% for c in run.judge_criteria %}
+        <tr>
+          <td>{{ c.label }}</td>
+          <td>
+            {% if c.assessment == "pass" %}<span style="color: var(--success-text);">✅ pass</span>
+            {% elif c.assessment == "warning" %}<span style="color: var(--warning-text);">⚠️ warning</span>
+            {% else %}<span style="color: var(--error-text);">❌ fail</span>
+            {% endif %}
+          </td>
+          <td>{{ c.note }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
     <p style="white-space: pre-wrap; line-height: 1.6; margin: 0;">{{ run.judge_reasoning }}</p>
     {% if run.judge_concerns %}
     <ul style="margin: 0.75rem 0 0; padding-left: 1.2rem; line-height: 1.8;">

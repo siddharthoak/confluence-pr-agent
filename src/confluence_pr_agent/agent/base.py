@@ -16,4 +16,12 @@ from confluence_pr_agent.models import ChangeAgentResult, PageDiff
 
 
 class ChangeEngine(Protocol):
-    async def implement_change(self, repo_dir: Path, diff: PageDiff, max_turns: int) -> ChangeAgentResult: ...
+    async def implement_change(
+        self, repo_dir: Path, diff: PageDiff, max_turns: int, retry_context: str | None = None
+    ) -> ChangeAgentResult:
+        """retry_context, when set, is the previous attempt's test failure
+        output -- see pipeline/orchestrator.py's self-correction loop. The
+        engine is expected to fix its own prior edits (still sitting
+        uncommitted in repo_dir) in place rather than starting over.
+        """
+        ...

@@ -7,6 +7,10 @@ import httpx
 from confluence_pr_agent.models import PageSnapshot
 
 
+def _cql_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 class ConfluenceClient:
     """Thin wrapper around the Confluence Cloud content API.
 
@@ -62,3 +66,34 @@ class ConfluenceClient:
             url=page_url,
             labels=labels,
         )
+
+    async def search_page_ids(self, space_key: str, labels: list[str] | None = None) -> list[str]:
+        """Finds every page in `space_key` carrying at least one of `labels`,
+        via CQL search -- the discovery half of polling (pipeline/poller.py).
+        No labels means no filter: every page in the space, same "empty =
+        everyone" semantics as CONFLUENCE_ALLOWED_LABELS on the webhook path.
+        """
+        clauses = [f'space="{_cql_escape(space_key)}"', "type=page"]
+        if labels:
+            label_clause = " OR ".join(f'label="{_cql_escape(label)}"' for label in labels)
+            clauses.append(f"({label_clause})")
+        cql = " AND ".join(clauses)
+
+        page_ids: list[str] = []
+        url = f"{self._base_url}/rest/api/content/search"
+        params: dict | None = {"cql": cql, "limit": 100}
+        # Bounded against a runaway `next` chain -- a space with more pages
+        # than this matching in one poll cycle isn't this POC's use case.
+        for _ in range(20):
+            resp = await self._client.get(url, params=params, auth=self._auth)
+            resp.raise_for_status()
+            data = resp.json()
+            page_ids.extend(str(r["id"]) for r in data.get("results", []))
+
+            next_path = data.get("_links", {}).get("next")
+            if not next_path:
+                break
+            url = f"{self._base_url}{next_path}"
+            params = None  # already encoded into next_path's query string
+
+        return page_ids

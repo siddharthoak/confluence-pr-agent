@@ -57,14 +57,16 @@ class GeminiCliEngine:
     def __init__(self, api_key: str = "") -> None:
         self._api_key = api_key
 
-    async def implement_change(self, repo_dir: Path, diff: PageDiff, max_turns: int) -> ChangeAgentResult:
+    async def implement_change(
+        self, repo_dir: Path, diff: PageDiff, max_turns: int, retry_context: str | None = None
+    ) -> ChangeAgentResult:
         if shutil.which(CLI_BINARY) is None:
             return ChangeAgentResult(
                 success=False,
                 summary=f"'{CLI_BINARY}' (Gemini CLI) not found on PATH. Install: npm install -g @google/gemini-cli",
             )
 
-        prompt = build_combined_prompt(diff)
+        prompt = build_combined_prompt(diff, retry_context)
         args = [CLI_BINARY, "-p", prompt, "--yolo", "--skip-trust", "--output-format", "json"]
         timeout = turns_to_timeout_seconds(max_turns)
         extra_env = {"GEMINI_API_KEY": self._api_key} if self._api_key else None

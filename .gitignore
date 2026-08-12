@@ -8,3 +8,7 @@ venv/
 data/*.json
 data/workdirs/
 .DS_Store
+
+# Real credential hashes live here once deployed -- Caddyfile.example is the
+# committed template. Same pattern as .env vs .env.example.
+Caddyfile

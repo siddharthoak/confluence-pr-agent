@@ -50,7 +50,9 @@ def parse_usage(stdout: str) -> dict | None:
 
 
 class CursorCliEngine:
-    async def implement_change(self, repo_dir: Path, diff: PageDiff, max_turns: int) -> ChangeAgentResult:
+    async def implement_change(
+        self, repo_dir: Path, diff: PageDiff, max_turns: int, retry_context: str | None = None
+    ) -> ChangeAgentResult:
         if shutil.which(CLI_BINARY) is None:
             return ChangeAgentResult(
                 success=False,
@@ -60,7 +62,7 @@ class CursorCliEngine:
                 ),
             )
 
-        prompt = build_combined_prompt(diff)
+        prompt = build_combined_prompt(diff, retry_context)
         args = [CLI_BINARY, "-p", "--force", "--output-format", "json", prompt]
         timeout = turns_to_timeout_seconds(max_turns)
 

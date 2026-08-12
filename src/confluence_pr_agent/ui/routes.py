@@ -15,14 +15,20 @@ import time
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from confluence_pr_agent.config import get_settings
+from confluence_pr_agent.pipeline.poller import poll_once
 from confluence_pr_agent.pipeline.stages import STAGE_LABELS
 from confluence_pr_agent.storage.run_store import RunStore
-from confluence_pr_agent.ui.config_fields import ALL_ENGINES, CONFIG_FIELDS, ENGINE_CREDENTIAL_BY_ENGINE
+from confluence_pr_agent.ui.config_fields import (
+    ALL_ENGINES,
+    CONFIG_FIELDS,
+    ENGINE_CREDENTIAL_BY_ENGINE,
+    REPO_CREDENTIAL_BY_PROVIDER,
+)
 from confluence_pr_agent.ui.diff_view import render_diff_html
 from confluence_pr_agent.ui.pipeline_flow import build_flow_steps
 from confluence_pr_agent.ui.usage_summary import summarize_usage
@@ -61,6 +67,14 @@ templates.env.filters["status_label"] = _status_label
 templates.env.filters["stage_label"] = lambda stage: STAGE_LABELS.get(stage, stage)
 
 ENV_PATH = Path(".env")
+
+
+def _is_valid_int(value: str) -> bool:
+    try:
+        int(value)
+        return True
+    except ValueError:
+        return False
 
 
 def _write_env_updates(path: Path, updates: dict[str, str]) -> None:
@@ -116,6 +130,7 @@ async def how_it_works(request: Request):
         "email_sent": True,
         "email_error": None,
         "judge_verdict": "approved",
+        "jira_issue_key": "SD-101",
     }
     return templates.TemplateResponse(
         request,
@@ -161,6 +176,7 @@ def _config_context(saved: bool = False, error: str | None = None) -> dict:
         "saved": saved,
         "error": error,
         "engine_credential_by_engine": ENGINE_CREDENTIAL_BY_ENGINE,
+        "repo_credential_by_provider": REPO_CREDENTIAL_BY_PROVIDER,
     }
 
 
@@ -191,6 +207,13 @@ async def save_config(request: Request):
         value = str(raw).strip()
         if f.secret and value == "":
             continue  # blank secret field means "leave unchanged" -- we never redisplay it
+        if f.input_type == "number" and (value == "" or not _is_valid_int(value)):
+            # A blank/non-numeric value here has no valid meaning (unlike a
+            # blank text field) -- writing it would corrupt .env into
+            # something Settings() can't parse at all, breaking every route
+            # that calls get_settings() until someone notices and fixes the
+            # file by hand. "Leave unchanged" is the only safe fallback.
+            continue
         os.environ[f.key] = value
         updates[f.key] = value
 
@@ -326,11 +349,25 @@ async def simulate_form(request: Request):
         "simulate.html",
         {
             "default_space_key": settings.confluence_space_key,
+            "poll_labels": settings.confluence_allowed_labels_list,
+            "polled": request.query_params.get("polled") == "1",
             "prefill": None,
             "result": None,
             "error": None,
         },
     )
+
+
+@router.post("/ui/poll/trigger")
+async def trigger_poll(background_tasks: BackgroundTasks):
+    """The "on demand" counterpart to the real poll loop (pipeline/poller.py,
+    started from the app's lifespan when CONFLUENCE_POLL_ENABLED is set) --
+    same poll_once() call, just fired immediately for a demo instead of
+    waiting out CONFLUENCE_POLL_INTERVAL_SECONDS. Backgrounded like the real
+    webhook route, since a poll that finds several pages can take minutes.
+    """
+    background_tasks.add_task(poll_once)
+    return RedirectResponse(url="/ui/simulate?polled=1", status_code=303)
 
 
 @router.post("/ui/simulate")
@@ -349,6 +386,8 @@ async def simulate_submit(request: Request):
             "simulate.html",
             {
                 "default_space_key": settings.confluence_space_key,
+                "poll_labels": settings.confluence_allowed_labels_list,
+                "polled": False,
                 "prefill": prefill,
                 "result": None,
                 "error": "Page ID is required and must be numeric -- it's the number in the page's Confluence URL.",
@@ -378,6 +417,8 @@ async def simulate_submit(request: Request):
         "simulate.html",
         {
             "default_space_key": settings.confluence_space_key,
+            "poll_labels": settings.confluence_allowed_labels_list,
+            "polled": False,
             "prefill": prefill,
             "result": result,
             "payload_sent": json.dumps(payload, indent=2),

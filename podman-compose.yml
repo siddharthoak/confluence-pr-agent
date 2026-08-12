@@ -1,7 +1,13 @@
-# Local POC deployment. Binds to 127.0.0.1 only -- this service is triggered
-# by manually curling the webhook endpoint (see docs/demo-spec-template.md),
-# not by a real internet-reachable Confluence webhook, so there's no reason
-# to expose it beyond localhost.
+# The app service itself still binds to 127.0.0.1 only -- direct access is
+# for on-box debugging, not the intended way in. The `caddy` service is the
+# actual public-facing piece for when this needs to be reachable beyond
+# localhost (real Confluence webhook delivery, remote demo access): it
+# terminates TLS and gates every route except /webhook/confluence and
+# /healthz behind HTTP Basic Auth. See Caddyfile.example -- copy it to
+# `Caddyfile` (gitignored) and fill in real credentials/domain before using
+# this service; `podman-compose up` without doing that will fail to find
+# ./Caddyfile, which is deliberate rather than starting an unauthenticated
+# proxy by accident.
 version: "3.9"
 services:
   confluence-pr-agent:
@@ -22,3 +28,22 @@ services:
       # this mount, there'd be no file inside the container for it to write
       # to, and edits would only last until the container is recreated.
       - ./.env:/app/.env
+
+  caddy:
+    image: docker.io/library/caddy:2
+    profiles: ["public"]  # `podman-compose --profile public up` -- opt-in, not started by a plain `up`
+    environment:
+      DOMAIN: ${DOMAIN:-http://localhost:8080}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - confluence-pr-agent
+
+volumes:
+  caddy_data:
+  caddy_config:

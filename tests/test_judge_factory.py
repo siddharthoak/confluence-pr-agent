@@ -17,6 +17,13 @@ from confluence_pr_agent.judge.providers.openai_judge import OpenAIJudge
 )
 def test_build_judge_dispatches_by_name(name, expected_type, settings):
     settings.judge_provider = name
+    # AnthropicJudge/OpenAIJudge both require a non-empty key just to
+    # construct their underlying client -- settings.anthropic_api_key is
+    # already set by the shared fixture, but openai_api_key isn't (this
+    # test previously only passed for "openai" because a real developer
+    # .env's OPENAI_API_KEY was silently leaking through the old, less
+    # isolated fixture).
+    settings.openai_api_key = "test-openai-key"
     assert isinstance(build_judge(settings), expected_type)
 
 

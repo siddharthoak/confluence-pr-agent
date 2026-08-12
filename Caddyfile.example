@@ -1,0 +1,47 @@
+# Template for exposing this service beyond localhost. Copy to `Caddyfile`
+# (gitignored -- same pattern as .env vs .env.example) and fill in real
+# values before deploying; don't commit the real file, since basicauth
+# entries are credential material even though they're hashed.
+#
+# What this does:
+#   - /webhook/confluence and /healthz are reachable with no auth at all.
+#     The webhook doesn't need it -- Confluence's request is verified by
+#     CONFLUENCE_WEBHOOK_SECRET (HMAC) inside the app itself, and adding a
+#     second, unrelated auth layer in front of it would just break real
+#     webhook delivery. /healthz stays open so an external monitor/load
+#     balancer health check doesn't need credentials either.
+#   - Everything else (/ui/*, /) requires HTTP Basic Auth over HTTPS --
+#     protects the config page (reads/writes your GitHub/Anthropic/SendGrid
+#     credentials), run history, and the webhook simulator.
+#
+# Usage:
+#   1. Generate a bcrypt hash for each person who needs access:
+#        podman run --rm docker.io/library/caddy:2 caddy hash-password --plaintext 'their-password'
+#      (or `docker run` if using Docker instead of podman)
+#   2. Add one line per person under `basicauth` below: <username> <hash>
+#   3. Set DOMAIN in .env (or the environment) to your real domain, e.g.
+#      confluence-pr-agent.neurealm.com -- Caddy then requests and renews a
+#      Let's Encrypt certificate for it automatically. Needs ports 80 and
+#      443 reachable from the internet (80 only for the ACME HTTP-01
+#      challenge + HTTP->HTTPS redirect).
+#   4. For local testing without a real domain/DNS, set
+#      DOMAIN=http://localhost:8080 instead -- the explicit http:// scheme
+#      tells Caddy to skip automatic HTTPS entirely for that address.
+
+{$DOMAIN} {
+	handle /webhook/* {
+		reverse_proxy confluence-pr-agent:8000
+	}
+
+	handle /healthz {
+		reverse_proxy confluence-pr-agent:8000
+	}
+
+	handle {
+		basic_auth {
+			# <username> <bcrypt-hash-from-step-1>
+			demo-user $2a$14$REPLACE_WITH_A_REAL_HASH_FROM_CADDY_HASH_PASSWORD
+		}
+		reverse_proxy confluence-pr-agent:8000
+	}
+}

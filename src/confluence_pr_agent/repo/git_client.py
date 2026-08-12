@@ -55,6 +55,19 @@ class GitClient:
     async def create_branch(self, repo_dir: Path, branch_name: str) -> None:
         await _run("git", "checkout", "-b", branch_name, cwd=repo_dir)
 
+    async def checkout_existing_branch(self, repo_dir: Path, branch_name: str) -> None:
+        """Fetches and checks out a branch that already exists on origin --
+        used to reuse a still-open PR's branch (pipeline/orchestrator.py)
+        instead of always branching fresh off base_branch. `clone()` only
+        fetched base_branch, so this branch isn't present in the local repo
+        yet; checking it out at its current remote tip means any commits a
+        human already pushed there (e.g. manual fixes on a flagged PR) are
+        picked up automatically -- the change engine's new commits land on
+        top of them, nothing is overwritten.
+        """
+        await _run("git", "fetch", "origin", f"{branch_name}:{branch_name}", cwd=repo_dir)
+        await _run("git", "checkout", branch_name, cwd=repo_dir)
+
     async def has_changes(self, repo_dir: Path) -> bool:
         output = await _run("git", "status", "--porcelain", cwd=repo_dir)
         return bool(output.strip())

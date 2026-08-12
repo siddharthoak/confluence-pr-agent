@@ -4,7 +4,29 @@
 <p class="subtitle">Builds the exact payload Confluence's "page updated" webhook sends and POSTs it to this service's own <code>/webhook/confluence</code> endpoint — signed correctly if a webhook secret is configured. No Postman, no hand-written JSON.</p>
 
 {% if error %}<div class="banner banner-error">{{ error }}</div>{% endif %}
+{% if polled %}<div class="banner banner-ok">Poll cycle started in the background — check <a href="/ui/runs">Pipeline Runs</a> in a few seconds.</div>{% endif %}
 
+<fieldset>
+  <legend>Poll now</legend>
+  <p class="hint" style="margin-top: 0;">
+    Confluence Cloud has no self-service webhook registration (that requires building a Forge/Connect app), so
+    polling is the real trigger mechanism: this searches space
+    <strong>{{ default_space_key }}</strong> for pages
+    {% if poll_labels %}
+      labeled {% for l in poll_labels %}<code>{{ l }}</code>{{ ", " if not loop.last else "" }}{% endfor %}
+    {% else %}
+      (no <code>CONFLUENCE_ALLOWED_LABELS</code> configured — every page in the space)
+    {% endif %}
+    and runs the pipeline for each. The same cycle also runs automatically every
+    <code>CONFLUENCE_POLL_INTERVAL_SECONDS</code> when <code>CONFLUENCE_POLL_ENABLED=true</code>
+    (see <a href="/ui/config">Configuration</a>) — this button just fires one immediately, for a demo.
+  </p>
+  <form method="post" action="/ui/poll/trigger">
+    <button type="submit">Poll now</button>
+  </form>
+</fieldset>
+
+<h2 style="font-size: 1rem;">Or simulate a single-page webhook delivery</h2>
 <form method="post" action="/ui/simulate">
   <label for="page_id">Confluence page ID <span class="hint">(required — the number in the page's URL)</span></label>
   <input type="text" name="page_id" id="page_id" required pattern="[0-9]+" placeholder="123456"

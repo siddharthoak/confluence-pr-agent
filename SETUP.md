@@ -137,3 +137,24 @@ If the change agent fails, or the target repo's test command
 *before* committing/pushing/opening a PR, and the page-version store is left
 unadvanced — the next webhook delivery (or a manual re-POST) will retry from
 the same diff rather than silently treating it as processed.
+
+## 5. Exposing this beyond localhost (optional)
+
+Not needed for the POC flow above (step 2 already covers demoing without a
+public endpoint). If/when you do want a real Confluence webhook to reach
+this service, or remote access to `/ui/*`:
+
+1. Copy `Caddyfile.example` to `Caddyfile` (gitignored — same pattern as
+   `.env`) and follow the instructions at the top of that file: generate a
+   bcrypt password hash per person who needs `/ui/*` access
+   (`caddy hash-password`), and set `DOMAIN` in `.env`.
+2. Start the `caddy` service, which is opt-in via a compose profile so a
+   plain `podman-compose up` never accidentally starts an unauthenticated
+   public proxy:
+   ```bash
+   podman compose --profile public up -d
+   ```
+3. `/webhook/confluence` and `/healthz` stay open with no auth (the webhook
+   is protected by `CONFLUENCE_WEBHOOK_SECRET` instead); everything else,
+   including `/ui/config`, requires the HTTP Basic Auth credentials from
+   step 1.

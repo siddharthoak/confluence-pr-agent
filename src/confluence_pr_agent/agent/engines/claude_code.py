@@ -15,8 +15,10 @@ from confluence_pr_agent.models import ChangeAgentResult, PageDiff
 
 
 class ClaudeCodeEngine:
-    async def implement_change(self, repo_dir: Path, diff: PageDiff, max_turns: int) -> ChangeAgentResult:
-        prompt = build_user_prompt(diff)
+    async def implement_change(
+        self, repo_dir: Path, diff: PageDiff, max_turns: int, retry_context: str | None = None
+    ) -> ChangeAgentResult:
+        prompt = build_user_prompt(diff, retry_context)
 
         options = ClaudeAgentOptions(
             cwd=str(repo_dir),

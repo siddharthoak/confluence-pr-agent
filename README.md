@@ -62,22 +62,26 @@ Confluence page edited
 | (testing/)              | Failure stops the pipeline before any push/PR.
 +-------------------+
         |
-        v (only if tests pass)
+        v (retried up to CHANGE_AGENT_MAX_ATTEMPTS times on failure)
 +-------------------+
-| LLM Judge               | Second, semantic gate (JUDGE_ENABLED): an
+| LLM Judge               | Advisory, not a gate (JUDGE_ENABLED): an
 | (judge/)                 | independent model (JUDGE_PROVIDER: anthropic |
-|                           | openai) reviews the actual code diff against the
-|                           | spec change and can still reject it -- passing
-|                           | tests doesn't prove the spec was implemented.
-|                           | Fails open (skips, doesn't block) if unconfigured
-|                           | or the call errors.
+|                           | openai) scores implements_spec/scoped/
+|                           | tests_cover_behavior independently and never
+|                           | blocks the PR -- it only changes what kind of
+|                           | PR opens next. Fails open if unconfigured or
+|                           | the call errors.
 +-------------------+
         |
-        v (only if approved, or skipped)
+        v
 +-------------------+
-| Git + GitHub client    | Commits, pushes the branch, opens a PR via the
-| (repo/)                 | GitHub REST API with a description linking back
-|                         | to the Confluence page.
+| Git + GitHub client    | Commits, pushes, and opens a PR (or, if a PR from
+| (repo/)                 | a prior run for this page is still open, pushes
+|                         | onto its branch and updates it in place instead
+|                         | of opening a duplicate). A judge rejection makes
+|                         | this a draft titled "[Needs Work]" with an
+|                         | agent:needs-work label and the rubric in the PR
+|                         | body; a warning gets an agent:warning label.
 +-------------------+
         |
         v

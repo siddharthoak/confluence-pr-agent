@@ -16,7 +16,7 @@ why, written so it can be pasted directly into a pull request description.
 """
 
 
-def build_user_prompt(diff: PageDiff) -> str:
+def build_user_prompt(diff: PageDiff, retry_context: str | None = None) -> str:
     header = (
         f"Confluence spec page: {diff.page.title}\n"
         f"Page URL: {diff.page.url}\n"
@@ -33,9 +33,17 @@ def build_user_prompt(diff: PageDiff) -> str:
             "The spec changed as shown below (unified diff of the page's plain-text content). "
             "Implement the corresponding code change:\n\n" + diff.diff_text
         )
+    if retry_context:
+        body += (
+            "\n\n---\n\nYour previous attempt at this same change left the repo's test suite "
+            "failing. The working directory already has your previous edits in it -- fix them "
+            "in place rather than starting over from scratch, unless the failure output below "
+            "makes clear the previous approach was fundamentally wrong. Previous test output:\n\n"
+            + retry_context
+        )
     return header + body
 
 
-def build_combined_prompt(diff: PageDiff) -> str:
+def build_combined_prompt(diff: PageDiff, retry_context: str | None = None) -> str:
     """For CLIs with no separate system-prompt channel: system + user prompt as one string."""
-    return f"{SYSTEM_PROMPT}\n\n---\n\n{build_user_prompt(diff)}"
+    return f"{SYSTEM_PROMPT}\n\n---\n\n{build_user_prompt(diff, retry_context)}"

@@ -14,6 +14,13 @@ from dataclasses import dataclass, field
 # happen to already appear in run history).
 ALL_ENGINES = ["claude_code", "cursor", "copilot", "codex", "gemini", "antigravity"]
 
+# "github" is the only one the pipeline actually implements today (see
+# config.py::repo_provider and pipeline/orchestrator.py::build_deps, which
+# refuses to run for anything else) -- the rest exist in the dropdown so the
+# config surface for "more than one provider" is there without pretending
+# any of them are wired up yet.
+REPO_PROVIDERS = ["github", "azure_devops", "gitlab", "bitbucket"]
+
 # Keys whose current value is never redisplayed in the form. Submitting one
 # blank means "leave it unchanged", not "clear it" -- see routes.py.
 ENGINE_CREDENTIAL_KEYS = (
@@ -30,6 +37,18 @@ ENGINE_CREDENTIAL_BY_ENGINE = {
     "gemini": "GEMINI_API_KEY",
     "copilot": None,  # reuses GITHUB_TOKEN
     "antigravity": None,  # OAuth-only
+}
+
+# Same show/hide pattern as ENGINE_CREDENTIAL_BY_ENGINE, for GITHUB_TOKEN --
+# it's a github-specific credential, so it shouldn't stay visible (and
+# suggest it's still relevant) when a different, unimplemented provider is
+# selected. None for every non-github provider since none of them have any
+# credential field yet -- there's nothing to show instead.
+REPO_CREDENTIAL_BY_PROVIDER = {
+    "github": "GITHUB_TOKEN",
+    "azure_devops": None,
+    "gitlab": None,
+    "bitbucket": None,
 }
 
 
@@ -63,14 +82,32 @@ CONFIG_FIELDS: list[ConfigField] = [
         help_text=(
             "Only pages carrying at least one of these Confluence labels are processed -- "
             "everything else (meeting notes, design docs, other project content) is ignored. "
-            "Leave empty to process any page (no filtering)."
+            "Leave empty to process any page (no filtering). Also the label search used by polling below."
         ),
     ),
-    # GitHub / target repo
-    ConfigField("TARGET_REPO", "Target repo", "GitHub", placeholder="owner/name"),
-    ConfigField("TARGET_REPO_BASE_BRANCH", "Base branch", "GitHub", placeholder="main"),
-    ConfigField("TARGET_REPO_TEST_COMMAND", "Test command", "GitHub", placeholder="pytest"),
-    ConfigField("GITHUB_TOKEN", "GitHub PAT", "GitHub", secret=True),
+    ConfigField(
+        "CONFLUENCE_POLL_ENABLED", "Poll for changes", "Confluence", input_type="select",
+        options=["true", "false"],
+        help_text=(
+            "Confluence Cloud has no self-service webhook registration, so this is the real trigger "
+            "mechanism: on a timer, searches for pages with the allowed labels above and runs the "
+            "pipeline for each. The Simulate page also has a \"Poll now\" button to fire one cycle "
+            "immediately, independent of this setting."
+        ),
+    ),
+    ConfigField(
+        "CONFLUENCE_POLL_INTERVAL_SECONDS", "Poll interval (seconds)", "Confluence", input_type="number",
+        placeholder="300",
+    ),
+    # Repository
+    ConfigField(
+        "REPO_PROVIDER", "Repo provider", "Repository", input_type="select", options=REPO_PROVIDERS,
+        help_text="Only github is currently implemented -- the others are reserved for future support.",
+    ),
+    ConfigField("TARGET_REPO", "Target repo", "Repository", placeholder="owner/name"),
+    ConfigField("TARGET_REPO_BASE_BRANCH", "Base branch", "Repository", placeholder="main"),
+    ConfigField("TARGET_REPO_TEST_COMMAND", "Test command", "Repository", placeholder="pytest"),
+    ConfigField("GITHUB_TOKEN", "GitHub PAT", "Repository", secret=True),
     # Change engine
     ConfigField(
         "CHANGE_AGENT_ENGINE", "Change engine", "Change engine", input_type="select",
@@ -79,6 +116,14 @@ CONFIG_FIELDS: list[ConfigField] = [
     ConfigField(
         "CHANGE_AGENT_MAX_TURNS", "Max turns / timeout budget", "Change engine", input_type="number",
         placeholder="30",
+    ),
+    ConfigField(
+        "CHANGE_AGENT_MAX_ATTEMPTS", "Self-correction attempts", "Change engine", input_type="number",
+        placeholder="3",
+        help_text=(
+            "If the repo's own tests fail, the agent gets another attempt with the failure fed back "
+            "into its prompt, up to this many attempts total. 1 disables retrying."
+        ),
     ),
     ConfigField(
         "ANTHROPIC_API_KEY", "Anthropic API key (claude_code)", "Change engine", secret=True,
@@ -110,8 +155,43 @@ CONFIG_FIELDS: list[ConfigField] = [
         "JUDGE_MODEL", "LLM Judge model", "LLM Judge",
         placeholder="blank = provider default (claude-sonnet-5 / gpt-4.1)",
     ),
+    # Jira
+    ConfigField(
+        "JIRA_ENABLED", "Jira story tracking", "Jira", input_type="select", options=["true", "false"],
+        help_text=(
+            "Tracks each spec change as a Jira story -- created once a real change is confirmed, "
+            "commented on (not duplicated) if the spec changes again while it's still open, and "
+            "updated with the PR link or a failure explanation once the run finishes. Writes the "
+            "story's description with the LLM Judge provider/model above if configured, otherwise "
+            "the Gemini key from the Change Engine tab, otherwise a plain non-AI-authored summary -- "
+            "no separate key needed either way."
+        ),
+    ),
+    ConfigField("JIRA_BASE_URL", "Jira site URL", "Jira", placeholder="https://your-team.atlassian.net"),
+    ConfigField("JIRA_USER_EMAIL", "Account email", "Jira", placeholder="you@example.com"),
+    ConfigField("JIRA_API_TOKEN", "API token", "Jira", secret=True),
+    ConfigField("JIRA_PROJECT_KEY", "Project key", "Jira", placeholder="SD"),
+    ConfigField(
+        "JIRA_ISSUE_TYPE", "Issue type", "Jira", input_type="select",
+        options=["Story", "Task", "Bug", "Epic"],
+        help_text="Must exist in the target project's issue type scheme -- team-managed Kanban projects, for example, often lack \"Story\".",
+    ),
+    ConfigField(
+        "JIRA_SUGGEST_STORY_POINTS", "Suggest story points", "Jira", input_type="select",
+        options=["true", "false"],
+        help_text=(
+            "Adds an \"AI-suggested complexity\" comment on the story -- never writes the real Story "
+            "Points field (a per-instance custom field an LLM has no basis to fill in directly). A "
+            "human still sizes the story; this is just a starting signal."
+        ),
+    ),
     # Email
+    ConfigField(
+        "EMAIL_PROVIDER", "Email provider", "Email", input_type="select", options=["sendgrid", "postmark"],
+        help_text="Uses the matching API key below.",
+    ),
     ConfigField("SENDGRID_API_KEY", "SendGrid API key", "Email", secret=True),
+    ConfigField("POSTMARK_API_KEY", "Postmark server token", "Email", secret=True),
     ConfigField("EMAIL_FROM_ADDRESS", "From address", "Email", placeholder="confluence-pr-agent@example.com"),
     ConfigField("EMAIL_TO_ADDRESSES", "To addresses", "Email", help_text="Comma-separated."),
 ]

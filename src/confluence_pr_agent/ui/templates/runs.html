@@ -72,6 +72,9 @@
       <td>{{ run.engine }}</td>
       <td>
         <span class="badge badge-{{ run.status }}">{{ run.status | status_label }}</span>
+        {% if run.judge_verdict == "approved_with_warnings" %}
+          <span class="badge badge-warning" title="LLM judge approved with warnings — worth a second look">⚠️ warning</span>
+        {% endif %}
         {% if run.status == "running" and run.current_stage %}
           <div class="hint" style="margin-top: 0.25rem;">{{ run.current_stage | stage_label }}&hellip;</div>
         {% endif %}
@@ -79,7 +82,7 @@
       <td>{% if run.status == "running" %}&mdash;{% else %}{{ "%.1f"|format(run.duration_seconds) }}s{% endif %}</td>
       <td>
         {% if run.pr_url %}
-          <a class="pr-link" href="{{ run.pr_url }}" target="_blank" rel="noopener">#{{ run.pr_number }} &rarr;</a>
+          <a class="pr-link" href="{{ run.pr_url }}" target="_blank" rel="noopener">#{{ run.pr_number }} &rarr;</a>{% if run.pr_draft %} <span class="badge badge-warning">draft</span>{% endif %}
         {% else %}
           &mdash;
         {% endif %}

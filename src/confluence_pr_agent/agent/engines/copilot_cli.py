@@ -24,14 +24,16 @@ CLI_BINARY = "copilot"
 
 
 class CopilotCliEngine:
-    async def implement_change(self, repo_dir: Path, diff: PageDiff, max_turns: int) -> ChangeAgentResult:
+    async def implement_change(
+        self, repo_dir: Path, diff: PageDiff, max_turns: int, retry_context: str | None = None
+    ) -> ChangeAgentResult:
         if shutil.which(CLI_BINARY) is None:
             return ChangeAgentResult(
                 success=False,
                 summary=f"'{CLI_BINARY}' (GitHub Copilot CLI) not found on PATH. Install: npm install -g @github/copilot",
             )
 
-        prompt = build_combined_prompt(diff)
+        prompt = build_combined_prompt(diff, retry_context)
         args = [CLI_BINARY, "-p", prompt, "--allow-all-tools", "--no-ask-user", "-s"]
         timeout = turns_to_timeout_seconds(max_turns)
 

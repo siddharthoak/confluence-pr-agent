@@ -86,20 +86,54 @@ def check_confluence() -> None:
         check("Confluence credentials", False, str(exc))
 
 
-def check_sendgrid() -> None:
-    api_key = os.environ.get("SENDGRID_API_KEY", "")
-    if not api_key:
-        check("SendGrid API key", False, "SENDGRID_API_KEY is not set")
-        return
-    try:
-        resp = httpx.get(
-            "https://api.sendgrid.com/v3/scopes",
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=10.0,
-        )
-        check("SendGrid API key", resp.status_code == 200, f"HTTP {resp.status_code}")
-    except httpx.HTTPError as exc:
-        check("SendGrid API key", False, str(exc))
+def check_email() -> None:
+    provider = os.environ.get("EMAIL_PROVIDER", "sendgrid").strip().lower()
+    from_address = os.environ.get("EMAIL_FROM_ADDRESS", "")
+    to_addresses = os.environ.get("EMAIL_TO_ADDRESSES", "")
+
+    if provider == "postmark":
+        api_key = os.environ.get("POSTMARK_API_KEY", "")
+        if not api_key:
+            check("Postmark server token", False, "POSTMARK_API_KEY is not set")
+        else:
+            try:
+                resp = httpx.get(
+                    "https://api.postmarkapp.com/server",
+                    headers={"X-Postmark-Server-Token": api_key, "Accept": "application/json"},
+                    timeout=10.0,
+                )
+                check("Postmark server token", resp.status_code == 200, f"HTTP {resp.status_code}")
+            except httpx.HTTPError as exc:
+                check("Postmark server token", False, str(exc))
+    else:
+        api_key = os.environ.get("SENDGRID_API_KEY", "")
+        if not api_key:
+            check("SendGrid API key", False, "SENDGRID_API_KEY is not set")
+        else:
+            try:
+                resp = httpx.get(
+                    "https://api.sendgrid.com/v3/scopes",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=10.0,
+                )
+                check("SendGrid API key", resp.status_code == 200, f"HTTP {resp.status_code}")
+            except httpx.HTTPError as exc:
+                check("SendGrid API key", False, str(exc))
+
+    # Not an API call -- just flagging the two placeholders from .env.example
+    # that must be replaced with real values before mail will actually
+    # deliver (Postmark/SendGrid both reject sending from an unverified
+    # sender signature/domain, regardless of whether the API key is valid).
+    check(
+        "EMAIL_FROM_ADDRESS is a real, provider-verified sender",
+        bool(from_address) and from_address != "confluence-pr-agent@example.com",
+        from_address or "not set",
+    )
+    check(
+        "EMAIL_TO_ADDRESSES is a real recipient list",
+        bool(to_addresses) and to_addresses != "team@example.com",
+        to_addresses or "not set",
+    )
 
 
 _ENGINE_REQUIREMENTS = {
@@ -163,7 +197,7 @@ def main() -> int:
     print("Credential checks:")
     check_github()
     check_confluence()
-    check_sendgrid()
+    check_email()
     check_change_engine()
     return 0
 

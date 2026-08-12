@@ -16,6 +16,8 @@ from confluence_pr_agent.judge.prompts import (
     VERDICT_TOOL_NAME,
     VERDICT_TOOL_PARAMETERS,
     build_prompt,
+    derive_verdict,
+    parse_criteria,
 )
 from confluence_pr_agent.models import ChangeAgentResult, JudgeResult, PageDiff
 
@@ -50,10 +52,12 @@ class OpenAIJudge:
         for call in response.choices[0].message.tool_calls or []:
             if call.function.name == VERDICT_TOOL_NAME:
                 verdict_input = json.loads(call.function.arguments)
+                criteria = parse_criteria(verdict_input["criteria"])
                 return JudgeResult(
-                    verdict=verdict_input["verdict"],
+                    verdict=derive_verdict(criteria),
                     reasoning=verdict_input["reasoning"],
                     concerns=list(verdict_input.get("concerns") or []),
+                    criteria=criteria,
                 )
 
         # tool_choice pins the model to VERDICT_TOOL_NAME, so this shouldn't

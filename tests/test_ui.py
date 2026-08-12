@@ -56,6 +56,20 @@ def test_config_form_renders(client):
     assert "CHANGE_AGENT_ENGINE" in resp.text
 
 
+def test_config_form_marks_github_token_as_repo_specific_for_client_side_toggling(client):
+    """GITHUB_TOKEN must carry data-repo-key so config.html's syncRepoFields()
+    can hide it when REPO_PROVIDER isn't "github" -- same pattern already
+    used for engine credentials (ANTHROPIC_API_KEY etc. hidden unless their
+    engine is selected). Only the data attribute/markup is testable here;
+    the actual show/hide is client-side JS, exercised visually, not by this
+    server-rendered-HTML test.
+    """
+    resp = client.get("/ui/config")
+    assert 'data-repo-key="GITHUB_TOKEN"' in resp.text
+    assert "REPO_CREDENTIAL_BY_PROVIDER" in resp.text
+    assert '"github": "GITHUB_TOKEN"' in resp.text
+
+
 def test_config_form_renders_taglist_editor_for_allowed_labels(client, _isolated_env_file):
     client.post("/ui/config", data={"CONFLUENCE_ALLOWED_LABELS": "brd,spec-for-agent"})
 
@@ -116,7 +130,35 @@ def test_secret_value_is_never_redisplayed_in_form(client, _isolated_env_file):
 
     resp = client.get("/ui/config")
     assert "ghp_supersecret" not in resp.text
-    assert "&#10003; set" in resp.text or "✓ set" in resp.text
+
+
+def test_blank_number_field_does_not_corrupt_env_file(client, _isolated_env_file):
+    """Regression test: a blank CHANGE_AGENT_MAX_ATTEMPTS/CONFLUENCE_POLL_
+    INTERVAL_SECONDS previously got written straight to .env as
+    KEY= -- which Settings() can't parse as an int, breaking get_settings()
+    (and therefore nearly every route) until someone edits the file by hand.
+    A blank number field must behave like a blank secret field: leave the
+    existing value alone.
+    """
+    client.post("/ui/config", data={"CHANGE_AGENT_MAX_ATTEMPTS": "5"})
+    client.post("/ui/config", data={"CHANGE_AGENT_MAX_ATTEMPTS": ""})
+
+    content = _isolated_env_file.read_text()
+    assert "CHANGE_AGENT_MAX_ATTEMPTS=5" in content
+    assert "CHANGE_AGENT_MAX_ATTEMPTS=\n" not in content
+
+    # Settings() must still parse cleanly after the save -- the actual
+    # symptom of the original bug.
+    get_settings.cache_clear()
+    get_settings()
+
+
+def test_non_numeric_value_for_a_number_field_is_rejected(client, _isolated_env_file):
+    client.post("/ui/config", data={"CHANGE_AGENT_MAX_ATTEMPTS": "3"})
+    client.post("/ui/config", data={"CHANGE_AGENT_MAX_ATTEMPTS": "not-a-number"})
+
+    content = _isolated_env_file.read_text()
+    assert "CHANGE_AGENT_MAX_ATTEMPTS=3" in content
 
 
 def test_runs_list_empty_state(client):
@@ -432,7 +474,7 @@ def test_run_detail_page_shows_progress_heading_and_active_stage_when_running(cl
     assert resp.status_code == 200
     assert "Progress" in resp.text
     assert "flow-step flow-step--active" in resp.text
-    assert resp.text.count("flow-step flow-step--done") == 2  # fetch_page, clone_repo
+    assert resp.text.count("flow-step flow-step--done") == 3  # fetch_page, create_jira_story, clone_repo
     assert "Confluence Spec Change" not in resp.text  # no spec_diff recorded for this run
 
 
@@ -446,6 +488,26 @@ def test_simulate_form_renders(client):
     resp = client.get("/ui/simulate")
     assert resp.status_code == 200
     assert "Simulate Confluence Webhook" in resp.text
+    assert "Poll now" in resp.text
+
+
+def test_poll_trigger_runs_a_poll_cycle_in_the_background_and_redirects(client, monkeypatch):
+    calls = []
+
+    async def _fake_poll_once(settings=None):
+        calls.append(settings)
+        return []
+
+    monkeypatch.setattr(ui_routes, "poll_once", _fake_poll_once)
+
+    resp = client.post("/ui/poll/trigger", follow_redirects=False)
+
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/ui/simulate?polled=1"
+    assert len(calls) == 1
+
+    resp = client.get("/ui/simulate?polled=1")
+    assert "Poll cycle started" in resp.text
 
 
 def test_simulate_rejects_missing_page_id(client):

@@ -38,8 +38,31 @@ class Settings(BaseSettings):
     # Empty = no filtering (every page is eligible), for backward compat.
     confluence_allowed_labels: str = Field(default="")
 
-    # GitHub / target repo
+    # Polling -- Confluence Cloud has no self-service way to register an
+    # arbitrary webhook URL (that requires building a Connect/Forge app), so
+    # this is the actual trigger mechanism: on a timer, search the space via
+    # CQL for pages carrying CONFLUENCE_ALLOWED_LABELS (or every page, if
+    # that's blank) and run the pipeline for whichever come back. See
+    # pipeline/poller.py. /webhook/confluence still exists and works if
+    # something is ever wired to call it, but nothing here relies on it.
+    confluence_poll_enabled: bool = Field(default=False)
+    confluence_poll_interval_seconds: int = Field(default=300)
+
+    # Target repo -- REPO_PROVIDER is forward-looking config surface only:
+    # github is the only value the pipeline actually implements (see
+    # pipeline/orchestrator.py::build_deps, which raises if it's anything
+    # else). azure_devops/gitlab/bitbucket are listed so the shape of "more
+    # than one provider" exists in the UI/settings without pretending any of
+    # them work yet -- wiring a second provider is a real client (mirroring
+    # repo/git_client.py + repo/github_client.py), not a config toggle.
+    repo_provider: str = Field(default="github")
     github_token: str = Field(default="")
+    # owner/name (not a URL) -- github_client.py's REST calls and
+    # git_client.py's clone URL both build directly off this shape. Revisit
+    # the format if/when a second provider is actually implemented; ADO's
+    # own addressing (org/project/repo) wouldn't fit this field either way,
+    # so generalizing the format now, before there's a second real
+    # consumer, would be guessing at a shape rather than deriving one.
     target_repo: str = Field(default="your-org/your-repo")
     target_repo_base_branch: str = Field(default="main")
     target_repo_test_command: str = Field(default="pytest")
@@ -48,6 +71,11 @@ class Settings(BaseSettings):
     # claude_code | cursor | copilot | codex | gemini | antigravity
     change_agent_engine: str = Field(default="claude_code")
     change_agent_max_turns: int = Field(default=30)
+    # Self-correction loop: if TARGET_REPO_TEST_COMMAND fails, the change
+    # engine gets another attempt with the failure output fed back into its
+    # prompt, up to this many attempts total (1 = no retry, today's
+    # behavior). See pipeline/orchestrator.py.
+    change_agent_max_attempts: int = Field(default=3)
     anthropic_api_key: str = Field(default="")  # claude_code engine + llm judge (see below)
     cursor_api_key: str = Field(default="")  # cursor engine
     openai_api_key: str = Field(default="")  # codex engine
@@ -65,8 +93,32 @@ class Settings(BaseSettings):
     judge_provider: str = Field(default="anthropic")  # anthropic | openai
     judge_model: str = Field(default="")  # blank = provider's own default (see judge/providers/*)
 
-    # SendGrid
+    # Jira -- optional. Tracks each spec change as a Jira story: created (or,
+    # if the story from a previous still-open run for this page is still
+    # open, commented on instead of duplicated) once a real change is
+    # confirmed, then commented on again with either the PR link or an
+    # explanation of what went wrong. Reuses judge_provider/judge_model for
+    # the LLM call that writes the story's description/AC -- see
+    # jira/story_writer.py -- rather than a separate provider setting.
+    # Every Jira call is fail-open: an outage or missing config never blocks
+    # or fails the pipeline, same as email/labels/the judge.
+    jira_enabled: bool = Field(default=False)
+    jira_base_url: str = Field(default="")  # site root, e.g. https://your-team.atlassian.net (no /wiki)
+    jira_user_email: str = Field(default="")
+    jira_api_token: str = Field(default="")
+    jira_project_key: str = Field(default="")
+    jira_issue_type: str = Field(default="Story")
+    # Comment-only, never written to the real Story Points field -- that
+    # field is a per-instance custom field (customfield_NNNNN) with no
+    # stable name, and an LLM's number has no basis in a team's own velocity
+    # calibration. A suggestion a human confirms is safer than a number
+    # that silently enters real sprint math.
+    jira_suggest_story_points: bool = Field(default=False)
+
+    # Team notification email -- one of: sendgrid | postmark
+    email_provider: str = Field(default="sendgrid")
     sendgrid_api_key: str = Field(default="")
+    postmark_api_key: str = Field(default="")  # Postmark calls this the "Server Token"
     email_from_address: str = Field(default="confluence-pr-agent@example.com")
     email_to_addresses: str = Field(default="team@example.com")
 

@@ -7,13 +7,24 @@
 {% if error %}<div class="banner banner-error">{{ error }}</div>{% endif %}
 
 <form method="post" action="/ui/config">
+  <div class="tab-bar" role="tablist">
+    {% for group_name, items in groups.items() %}
+    {% set slug = group_name | lower | replace(" ", "-") %}
+    <button type="button" class="tab-btn" data-tab="{{ slug }}" role="tab">
+      {{ group_name }}
+    </button>
+    {% endfor %}
+  </div>
+
   {% for group_name, items in groups.items() %}
-  <fieldset>
+  {% set slug = group_name | lower | replace(" ", "-") %}
+  <fieldset class="tab-panel" data-tab-panel="{{ slug }}">
     <legend>{{ group_name }}</legend>
     {% for item in items %}
       {% set f = item.field %}
       {% set is_engine_credential = f.key in ["ANTHROPIC_API_KEY", "CURSOR_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"] %}
-      <div {% if is_engine_credential %}class="engine-fields" data-engine-key="{{ f.key }}"{% endif %}>
+      {% set is_repo_credential = f.key == "GITHUB_TOKEN" %}
+      <div {% if is_engine_credential %}class="engine-fields" data-engine-key="{{ f.key }}"{% elif is_repo_credential %}class="repo-fields" data-repo-key="{{ f.key }}"{% endif %}>
         <label for="{{ f.key }}">
           {{ f.label }}
           {% if item.is_set %}<span class="set-badge">&#10003; set</span>{% endif %}
@@ -51,6 +62,8 @@
 
 <script>
   const ENGINE_CREDENTIAL_BY_ENGINE = {{ engine_credential_by_engine | tojson }};
+  const REPO_CREDENTIAL_BY_PROVIDER = {{ repo_credential_by_provider | tojson }};
+  const ACTIVE_TAB_STORAGE_KEY = "confluence-pr-agent:config-tab";
 
   function syncEngineFields() {
     const select = document.getElementById("CHANGE_AGENT_ENGINE");
@@ -59,6 +72,34 @@
     document.querySelectorAll("[data-engine-key]").forEach((el) => {
       el.classList.toggle("active", el.dataset.engineKey === activeKey);
     });
+  }
+
+  function syncRepoFields() {
+    const select = document.getElementById("REPO_PROVIDER");
+    if (!select) return;
+    const activeKey = REPO_CREDENTIAL_BY_PROVIDER[select.value];
+    document.querySelectorAll("[data-repo-key]").forEach((el) => {
+      el.classList.toggle("active", el.dataset.repoKey === activeKey);
+    });
+  }
+
+  // Which group is showing survives a page reload (e.g. the redirect after
+  // Save) via localStorage, not just in-memory state -- otherwise saving
+  // from the Jira tab would dump you back on Confluence every time.
+  function initTabs() {
+    const buttons = Array.from(document.querySelectorAll(".tab-btn"));
+    const panels = Array.from(document.querySelectorAll(".tab-panel"));
+    if (!buttons.length) return;
+
+    function activate(tab) {
+      const target = buttons.some((b) => b.dataset.tab === tab) ? tab : buttons[0].dataset.tab;
+      buttons.forEach((b) => b.classList.toggle("active", b.dataset.tab === target));
+      panels.forEach((p) => p.classList.toggle("active", p.dataset.tabPanel === target));
+      localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, target);
+    }
+
+    buttons.forEach((b) => b.addEventListener("click", () => activate(b.dataset.tab)));
+    activate(localStorage.getItem(ACTIVE_TAB_STORAGE_KEY) || buttons[0].dataset.tab);
   }
 
   // Editable chip list backed by a hidden comma-separated input, so the
@@ -136,9 +177,13 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => {
+    initTabs();
     syncEngineFields();
     const select = document.getElementById("CHANGE_AGENT_ENGINE");
     if (select) select.addEventListener("change", syncEngineFields);
+    syncRepoFields();
+    const repoSelect = document.getElementById("REPO_PROVIDER");
+    if (repoSelect) repoSelect.addEventListener("change", syncRepoFields);
     initTagLists();
   });
 </script>

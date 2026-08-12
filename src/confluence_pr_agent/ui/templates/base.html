@@ -26,6 +26,9 @@
     --error-border: rgba(255, 130, 152, 0.4);
     --neutral-bg: rgba(163, 167, 197, 0.16);
     --neutral-text: #c5c8e2;
+    --warning-bg: rgba(245, 166, 35, 0.18);
+    --warning-text: #f5b83d;
+    --warning-border: rgba(245, 184, 61, 0.4);
   }
 
   * { box-sizing: border-box; }
@@ -81,6 +84,30 @@
   h1 { margin-bottom: 0.25rem; font-weight: 700; letter-spacing: -0.01em; }
   .subtitle { color: var(--text-muted); margin-top: 0; margin-bottom: 1.75rem; font-size: 0.95rem; line-height: 1.5; }
 
+  .tab-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0;
+  }
+  .tab-btn {
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    border-radius: 0;
+    border-bottom: 2px solid transparent;
+    padding: 0.65rem 0.9rem;
+    font-size: 0.88rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+  }
+  .tab-btn:hover { background: transparent; color: var(--text); }
+  .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+
   fieldset {
     border: 1px solid var(--border);
     background: var(--bg-elevated);
@@ -88,6 +115,8 @@
     margin-bottom: 1.5rem;
     padding: 1.1rem 1.4rem 1.4rem;
   }
+  fieldset.tab-panel { display: none; }
+  fieldset.tab-panel.active { display: block; }
   legend {
     font-weight: 600;
     padding: 0 0.5rem;
@@ -231,6 +260,7 @@
   .badge-error { background: var(--error-bg); color: var(--error-text); border-color: var(--error-border); }
   .badge-no_change_detected { background: var(--neutral-bg); color: var(--neutral-text); }
   .badge-ignored { background: var(--neutral-bg); color: var(--neutral-text); }
+  .badge-warning { background: var(--warning-bg); color: var(--warning-text); border-color: var(--warning-border); }
   .badge-running {
     background: rgba(91, 156, 230, 0.16);
     color: var(--accent-blue);
@@ -273,6 +303,7 @@
   .flow-step--done .flow-node { background: var(--success-bg); border-color: var(--success-border); color: var(--success-text); }
   .flow-step--active .flow-node { background: rgba(91, 156, 230, 0.18); border-color: rgba(91, 156, 230, 0.5); color: var(--accent-blue); animation: pulse-running 1.6s ease-in-out infinite; }
   .flow-step--failed .flow-node { background: var(--error-bg); border-color: var(--error-border); color: var(--error-text); }
+  .flow-step--warning .flow-node { background: var(--warning-bg); border-color: var(--warning-border); color: var(--warning-text); }
   .flow-step--skipped .flow-node { background: var(--neutral-bg); border-color: transparent; color: var(--neutral-text); }
   .flow-pulse-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent-blue); }
   .flow-label { margin-top: 0.55rem; font-size: 0.78rem; font-weight: 600; color: var(--text); line-height: 1.3; }
@@ -280,6 +311,7 @@
   .flow-detail { margin-top: 0.15rem; font-size: 0.7rem; color: var(--text-muted); line-height: 1.3; word-break: break-word; }
   .flow-connector { flex: 1; height: 2px; min-width: 20px; background: var(--border); margin-top: 21px; }
   .flow-connector--done { background: var(--success-border); }
+  .flow-connector--warning { background: var(--warning-border); }
 
   .banner { padding: 0.8rem 1.1rem; border-radius: 10px; margin-bottom: 1.25rem; font-size: 0.88rem; border: 1px solid; line-height: 1.5; }
   .banner-ok { background: var(--success-bg); border-color: var(--success-border); color: var(--success-text); }
@@ -307,6 +339,8 @@
 
   .engine-fields { display: none; }
   .engine-fields.active { display: block; }
+  .repo-fields { display: none; }
+  .repo-fields.active { display: block; }
 
   a.pr-link { color: var(--accent-blue); font-weight: 600; text-decoration: none; }
   a.pr-link:hover { text-decoration: underline; }

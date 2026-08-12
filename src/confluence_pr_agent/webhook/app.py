@@ -2,23 +2,44 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 
 from confluence_pr_agent.config import get_settings
 from confluence_pr_agent.pipeline.orchestrator import run_pipeline
+from confluence_pr_agent.pipeline.poller import poll_loop
 from confluence_pr_agent.ui.routes import router as ui_router
 from confluence_pr_agent.webhook.schemas import extract_event_type, extract_page_id
 
 logging.basicConfig(level=get_settings().log_level)
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings = get_settings()
+    poll_task: asyncio.Task | None = None
+    if settings.confluence_poll_enabled:
+        logger.info("Starting Confluence poll loop (every %ss)", settings.confluence_poll_interval_seconds)
+        poll_task = asyncio.create_task(poll_loop(settings))
+    yield
+    if poll_task:
+        poll_task.cancel()
+        try:
+            await poll_task
+        except asyncio.CancelledError:
+            pass
+
+
 app = FastAPI(
     title="Confluence-to-PR Change Agent",
     description="Receives Confluence page-updated webhooks and drives the spec-to-PR pipeline.",
+    lifespan=lifespan,
 )
 app.include_router(ui_router)
 

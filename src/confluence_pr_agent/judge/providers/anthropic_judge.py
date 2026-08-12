@@ -13,6 +13,8 @@ from confluence_pr_agent.judge.prompts import (
     VERDICT_TOOL_NAME,
     VERDICT_TOOL_PARAMETERS,
     build_prompt,
+    derive_verdict,
+    parse_criteria,
 )
 from confluence_pr_agent.models import ChangeAgentResult, JudgeResult, PageDiff
 
@@ -46,10 +48,12 @@ class AnthropicJudge:
         for block in response.content:
             if block.type == "tool_use" and block.name == VERDICT_TOOL_NAME:
                 verdict_input = block.input
+                criteria = parse_criteria(verdict_input["criteria"])
                 return JudgeResult(
-                    verdict=verdict_input["verdict"],
+                    verdict=derive_verdict(criteria),
                     reasoning=verdict_input["reasoning"],
                     concerns=list(verdict_input.get("concerns") or []),
+                    criteria=criteria,
                 )
 
         # tool_choice pins the model to VERDICT_TOOL_NAME, so this shouldn't

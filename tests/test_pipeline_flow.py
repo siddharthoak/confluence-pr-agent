@@ -88,8 +88,29 @@ def test_opened_pr_marks_everything_done_including_email_when_sent():
     )
     states = {s["key"]: s["state"] for s in steps}
 
+    # No jira_issue_key on this run (JIRA_ENABLED off), so that stage reads
+    # "skipped" like llm_judge/send_email do when they didn't run either.
     for key in STAGE_KEYS:
-        assert states[key] == "done"
+        if key == "create_jira_story":
+            assert states[key] == "skipped"
+        else:
+            assert states[key] == "done"
+
+
+def test_opened_pr_marks_jira_story_done_when_an_issue_was_created():
+    steps = build_flow_steps(
+        _run(
+            status="opened_pr",
+            current_stage="send_email",
+            email_sent=True,
+            pr_number=7,
+            judge_verdict="approved",
+            jira_issue_key="SD-42",
+        )
+    )
+    states = {s["key"]: s["state"] for s in steps}
+
+    assert states["create_jira_story"] == "done"
 
 
 def test_opened_pr_marks_email_skipped_when_not_sent():
@@ -117,16 +138,30 @@ def test_opened_pr_marks_judge_skipped_when_no_verdict_recorded():
     assert states["open_pr"] == "done"
 
 
-def test_judge_rejected_marks_llm_judge_failed_and_later_stages_skipped():
+def test_judge_rejected_marks_llm_judge_failed_but_open_pr_done_and_email_skipped():
+    """The judge is advisory, not a gate (orchestrator.py) -- a rejection
+    still opens a flagged draft PR, so open_pr must read "done" here, not
+    "skipped" the way it does for a real blocking failure (tests_failed).
+    Only the summary email is intentionally skipped for a rejected run.
+    """
     steps = build_flow_steps(
-        _run(status="judge_rejected", current_stage="llm_judge", judge_verdict="rejected")
+        _run(status="judge_rejected", current_stage="open_pr", judge_verdict="rejected", pr_number=9, pr_draft=True)
     )
     states = {s["key"]: s["state"] for s in steps}
 
     assert states["run_tests"] == "done"
     assert states["llm_judge"] == "failed"
-    assert states["open_pr"] == "skipped"
+    assert states["open_pr"] == "done"
     assert states["send_email"] == "skipped"
+
+
+def test_opened_pr_marks_llm_judge_warning_for_approved_with_warnings():
+    steps = build_flow_steps(
+        _run(status="opened_pr", current_stage="send_email", email_sent=True, judge_verdict="approved_with_warnings")
+    )
+    states = {s["key"]: s["state"] for s in steps}
+
+    assert states["llm_judge"] == "warning"
 
 
 def test_details_reflect_engine_files_and_pr_number():
@@ -146,3 +181,29 @@ def test_details_reflect_engine_files_and_pr_number():
     assert "2 files" in by_key["ai_agent"]["detail"]
     assert by_key["open_pr"]["detail"] == "#3"
     assert by_key["send_email"]["detail"] == "sent"
+
+
+def test_details_reflect_draft_pr_and_multiple_attempts():
+    steps = build_flow_steps(
+        _run(
+            status="judge_rejected",
+            current_stage="open_pr",
+            judge_verdict="rejected",
+            pr_number=9,
+            pr_draft=True,
+            attempts=2,
+        )
+    )
+    by_key = {s["key"]: s for s in steps}
+
+    assert by_key["open_pr"]["detail"] == "#9 (draft)"
+    assert "2 attempts" in by_key["ai_agent"]["detail"]
+
+
+def test_details_reflect_reused_pr():
+    steps = build_flow_steps(
+        _run(status="opened_pr", current_stage="send_email", email_sent=True, pr_number=9, reused_pr=True)
+    )
+    by_key = {s["key"]: s for s in steps}
+
+    assert by_key["open_pr"]["detail"] == "#9 (updated)"
