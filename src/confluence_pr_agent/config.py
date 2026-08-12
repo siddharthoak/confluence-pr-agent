@@ -48,11 +48,22 @@ class Settings(BaseSettings):
     # claude_code | cursor | copilot | codex | gemini | antigravity
     change_agent_engine: str = Field(default="claude_code")
     change_agent_max_turns: int = Field(default=30)
-    anthropic_api_key: str = Field(default="")  # claude_code engine
+    anthropic_api_key: str = Field(default="")  # claude_code engine + llm judge (see below)
     cursor_api_key: str = Field(default="")  # cursor engine
     openai_api_key: str = Field(default="")  # codex engine
     gemini_api_key: str = Field(default="")  # gemini engine
     # copilot engine reuses github_token below; antigravity is OAuth-only (no key)
+
+    # LLM-as-judge review gate: after tests pass but before a PR is opened,
+    # an independent LLM call reviews the actual code diff against the spec
+    # change and can still reject it -- a green test suite doesn't prove the
+    # spec was implemented (or implemented without scope creep). Independent
+    # of CHANGE_AGENT_ENGINE by design -- see judge/factory.py. If the
+    # selected provider's API key isn't set, this step is skipped rather
+    # than blocking the PR (judge/factory.py::judge_configured).
+    judge_enabled: bool = Field(default=True)
+    judge_provider: str = Field(default="anthropic")  # anthropic | openai
+    judge_model: str = Field(default="")  # blank = provider's own default (see judge/providers/*)
 
     # SendGrid
     sendgrid_api_key: str = Field(default="")

@@ -34,12 +34,15 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 # and orchestrator.py's "running" placeholder. Fixed, not derived from run
 # history, for the same reason as ALL_ENGINES: the filter shouldn't be
 # limited to outcomes that happen to have occurred yet.
-ALL_STATUSES = ["running", "opened_pr", "tests_failed", "error", "no_change_detected", "ignored"]
+ALL_STATUSES = [
+    "running", "opened_pr", "tests_failed", "judge_rejected", "error", "no_change_detected", "ignored",
+]
 
 STATUS_LABELS = {
     "running": "Running",
     "opened_pr": "Open PR",
     "tests_failed": "Tests Failed",
+    "judge_rejected": "Judge Rejected",
     "error": "Error",
     "no_change_detected": "No Change",
     "ignored": "Ignored (label)",
@@ -86,6 +89,42 @@ def _write_env_updates(path: Path, updates: dict[str, str]) -> None:
 @router.get("/ui")
 async def ui_home() -> RedirectResponse:
     return RedirectResponse(url="/ui/runs")
+
+
+# ---------------------------------------------------------------------------
+# How it works -- a walkthrough of the pipeline for live demos, so the
+# journey can be narrated step by step inside the app itself instead of a
+# separate slide deck. Built from a synthetic, fully-"done" run through
+# build_flow_steps() so the overview diagram at the top always matches
+# pipeline/stages.py -- the same source of truth /ui/runs/{id} uses -- and
+# can't quietly drift out of sync with the real pipeline.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/ui/how-it-works")
+async def how_it_works(request: Request):
+    settings = get_settings()
+    demo_run = {
+        "status": "opened_pr",
+        "current_stage": "send_email",
+        "engine": settings.change_agent_engine,
+        "target_repo": settings.target_repo,
+        "page_id": "458753",
+        "page_title": "Checkout Flow Spec",
+        "files_changed": ["src/checkout.py", "tests/test_checkout.py"],
+        "pr_number": 42,
+        "email_sent": True,
+        "email_error": None,
+        "judge_verdict": "approved",
+    }
+    return templates.TemplateResponse(
+        request,
+        "how_it_works.html",
+        {
+            "flow_steps": build_flow_steps(demo_run),
+            "settings": settings,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

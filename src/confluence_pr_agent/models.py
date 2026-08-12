@@ -52,6 +52,19 @@ class RepoTestResult:
 
 
 @dataclass
+class JudgeResult:
+    """Verdict from the LLM-as-judge review gate (pipeline/orchestrator.py),
+    which runs after tests pass but before a PR is opened -- a green test
+    suite doesn't prove the spec was actually implemented (or implemented
+    without unrelated changes), so this is a second, semantic gate.
+    """
+
+    verdict: str  # "approved" | "rejected" | "skipped" (disabled, or the judge call itself failed)
+    reasoning: str
+    concerns: list[str] = field(default_factory=list)
+
+
+@dataclass
 class PullRequestResult:
     number: int
     url: str
@@ -60,11 +73,12 @@ class PullRequestResult:
 
 @dataclass
 class PipelineResult:
-    status: str  # "opened_pr" | "no_change_detected" | "tests_failed" | "error" | "ignored"
+    status: str  # "opened_pr" | "no_change_detected" | "tests_failed" | "judge_rejected" | "error" | "ignored"
     page: PageSnapshot | None = None
     diff: PageDiff | None = None
     change: ChangeAgentResult | None = None
     tests: RepoTestResult | None = None
+    judge: JudgeResult | None = None
     pull_request: PullRequestResult | None = None
     error: str | None = None
     # Email is best-effort and independent of pipeline success: a PR that
@@ -104,4 +118,7 @@ class RunRecord:
     usage: dict | None = None
     raw_log: str | None = None  # tail of the engine's own output; detail-page only
     test_output: str | None = None  # tail of the target repo's test command output; detail-page only
+    judge_verdict: str | None = None  # "approved" | "rejected" | "skipped"
+    judge_reasoning: str | None = None
+    judge_concerns: list[str] = field(default_factory=list)
     spec_diff: str | None = None  # the Confluence diff text the agent was actually prompted with

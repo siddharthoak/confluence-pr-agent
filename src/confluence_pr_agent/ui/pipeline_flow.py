@@ -22,6 +22,9 @@ def _detail_for(key: str, run: dict) -> str | None:
         return engine or None
     if key == "run_tests":
         return None  # pass/fail communicated by the step's color state, not text
+    if key == "llm_judge":
+        verdict = run.get("judge_verdict")
+        return verdict.capitalize() if verdict else None
     if key == "open_pr":
         return f"#{run['pr_number']}" if run.get("pr_number") else None
     if key == "send_email":
@@ -42,12 +45,14 @@ def build_flow_steps(run: dict) -> list[dict]:
     for i, key in enumerate(STAGE_KEYS):
         if status == "running":
             state = "done" if i < current_index else "active" if i == current_index else "pending"
-        elif status in ("error", "tests_failed"):
+        elif status in ("error", "tests_failed", "judge_rejected"):
             state = "done" if i < current_index else "failed" if i == current_index else "skipped"
         elif status in ("no_change_detected", "ignored"):
             state = "done" if i <= current_index else "skipped"
         elif status == "opened_pr":
-            if key == "send_email":
+            if key == "llm_judge":
+                state = "done" if run.get("judge_verdict") else "skipped"
+            elif key == "send_email":
                 state = "done" if run.get("email_sent") else "skipped"
             else:
                 state = "done"

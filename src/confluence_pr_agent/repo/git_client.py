@@ -67,6 +67,17 @@ class GitClient:
                 files.append(line[3:].strip())
         return files
 
+    async def diff(self, repo_dir: Path) -> str:
+        """Full unified diff of everything the change engine did, staged and
+        unstaged, tracked and new -- used by the LLM judge review gate. Runs
+        `git add -A` first (same as commit_all, and harmless to repeat)
+        because an unstaged `git diff` alone omits the *content* of new
+        (untracked) files, which is exactly what a from-scratch change is
+        made of.
+        """
+        await _run("git", "add", "-A", cwd=repo_dir)
+        return await _run("git", "diff", "--cached", cwd=repo_dir)
+
     async def commit_all(self, repo_dir: Path, message: str) -> None:
         await _run("git", "add", "-A", cwd=repo_dir)
         await _run(

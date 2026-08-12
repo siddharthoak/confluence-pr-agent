@@ -64,6 +64,17 @@ Confluence page edited
         |
         v (only if tests pass)
 +-------------------+
+| LLM Judge               | Second, semantic gate (JUDGE_ENABLED): an
+| (judge/)                 | independent model (JUDGE_PROVIDER: anthropic |
+|                           | openai) reviews the actual code diff against the
+|                           | spec change and can still reject it -- passing
+|                           | tests doesn't prove the spec was implemented.
+|                           | Fails open (skips, doesn't block) if unconfigured
+|                           | or the call errors.
++-------------------+
+        |
+        v (only if approved, or skipped)
++-------------------+
 | Git + GitHub client    | Commits, pushes the branch, opens a PR via the
 | (repo/)                 | GitHub REST API with a description linking back
 |                         | to the Confluence page.
@@ -81,8 +92,13 @@ which the webhook receiver calls as a FastAPI background task.
 
 ## Web UI
 
-Three unauthenticated pages, all under `/ui/`:
+Four unauthenticated pages, all under `/ui/`:
 
+- **`/ui/how-it-works`** — a walkthrough of the pipeline stage by stage, for
+  narrating in a demo instead of a separate slide deck. The overview diagram
+  at the top is built from the same `pipeline/stages.py` sequence and
+  `ui/pipeline_flow.py` component that `/ui/runs/{id}` uses, so it can't
+  drift out of sync with the real pipeline.
 - **`/ui/config`** — edit every credential and setting listed in
   `.env.example` from a form instead of a text file. Secret fields are
   write-only: the current value is never redisplayed, and submitting one
@@ -117,6 +133,7 @@ src/confluence_pr_agent/
   repo/                     git CLI wrapper + GitHub REST client (PRs)
   agent/                     Pluggable change engine (base.py, factory.py, engines/)
   testing/                    Runs the target repo's test suite as a gate
+  judge/                        Pluggable LLM judge (base.py, factory.py, providers/)
   notifications/                SendGrid client + email templates
   pipeline/                      Orchestrator tying every stage together
   ui/                              Config / runs / webhook-simulator pages

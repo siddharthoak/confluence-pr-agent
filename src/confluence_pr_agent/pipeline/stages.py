@@ -6,13 +6,14 @@ retrospectively afterward). One source of truth so the two can't drift.
 
 from __future__ import annotations
 
-STAGE_KEYS = ["fetch_page", "clone_repo", "ai_agent", "run_tests", "open_pr", "send_email"]
+STAGE_KEYS = ["fetch_page", "clone_repo", "ai_agent", "run_tests", "llm_judge", "open_pr", "send_email"]
 
 STAGE_LABELS = {
     "fetch_page": "Confluence",
     "clone_repo": "Clone Repo",
     "ai_agent": "AI Agent",
     "run_tests": "Tests",
+    "llm_judge": "LLM Judge",
     "open_pr": "Pull Request",
     "send_email": "Email",
 }

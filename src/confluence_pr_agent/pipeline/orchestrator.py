@@ -27,7 +27,9 @@ from confluence_pr_agent.agent.factory import build_change_engine
 from confluence_pr_agent.config import Settings, get_settings
 from confluence_pr_agent.confluence.client import ConfluenceClient
 from confluence_pr_agent.confluence.diff import compute_diff
-from confluence_pr_agent.models import PipelineResult, RunRecord
+from confluence_pr_agent.judge.base import ChangeJudge
+from confluence_pr_agent.judge.factory import build_judge, judge_configured
+from confluence_pr_agent.models import JudgeResult, PipelineResult, RunRecord
 from confluence_pr_agent.notifications.sendgrid_client import SendGridClient
 from confluence_pr_agent.notifications.templates import build_summary_email
 from confluence_pr_agent.pipeline.stages import STAGE_KEYS
@@ -52,6 +54,7 @@ class PipelineDeps:
     sendgrid: SendGridClient
     change_engine: ChangeEngine
     run_store: RunStore
+    judge: ChangeJudge
 
 
 def build_deps(settings: Settings | None = None) -> PipelineDeps:
@@ -69,6 +72,7 @@ def build_deps(settings: Settings | None = None) -> PipelineDeps:
         sendgrid=SendGridClient(settings.sendgrid_api_key),
         change_engine=build_change_engine(settings),
         run_store=RunStore(settings.runs_store_path),
+        judge=build_judge(settings),
     )
 
 
@@ -123,6 +127,7 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
         change = result.change
         pull_request = result.pull_request
         tests = result.tests
+        judge = result.judge
         deps.run_store.upsert_run(
             RunRecord(
                 run_id=run_id,
@@ -147,6 +152,9 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                 raw_log=(change.raw_log[-8000:] if change and change.raw_log else None),
                 test_output=(tests.output[-8000:] if tests and tests.output else None),
                 spec_diff=(diff.diff_text[:8000] if diff and diff.diff_text else None),
+                judge_verdict=judge.verdict if judge else None,
+                judge_reasoning=judge.reasoning if judge else None,
+                judge_concerns=judge.concerns if judge else [],
             )
         )
         return result
@@ -225,6 +233,51 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                 PipelineResult(status="tests_failed", page=page, diff=diff, change=change, tests=tests)
             )
 
+        judge_result: JudgeResult | None = None
+        if settings.judge_enabled:
+            mark_stage("llm_judge")
+            if not judge_configured(settings):
+                judge_result = JudgeResult(
+                    verdict="skipped",
+                    reasoning=(
+                        f"No API key configured for judge provider '{settings.judge_provider}'; "
+                        "skipping LLM review."
+                    ),
+                )
+                logger.info(
+                    "Skipping LLM judge for page %s: no API key configured for provider '%s'.",
+                    page_id,
+                    settings.judge_provider,
+                )
+            else:
+                try:
+                    code_diff = await deps.git.diff(repo_dir)
+                    judge_result = await deps.judge.evaluate(diff, change, code_diff)
+                except Exception as exc:
+                    # Fail open, same reasoning as the email step below: the
+                    # judge is a second opinion, not the source of truth, so
+                    # an unreliable API call must not turn an otherwise good
+                    # change into a lost PR.
+                    logger.warning(
+                        "LLM judge failed for page %s; proceeding without review: %s", page_id, exc
+                    )
+                    judge_result = JudgeResult(
+                        verdict="skipped", reasoning=f"Judge call failed; proceeding without review: {exc}"
+                    )
+
+            if judge_result.verdict == "rejected":
+                logger.error("LLM judge rejected the change for page %s: %s", page_id, judge_result.reasoning)
+                return finish(
+                    PipelineResult(
+                        status="judge_rejected",
+                        page=page,
+                        diff=diff,
+                        change=change,
+                        tests=tests,
+                        judge=judge_result,
+                    )
+                )
+
         mark_stage("open_pr")
         commit_message = f"Sync with Confluence spec: {page.title} (v{page.version})\n\n{change.summary}"
         await deps.git.commit_all(repo_dir, commit_message)
@@ -290,6 +343,7 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                 diff=diff,
                 change=change,
                 tests=tests,
+                judge=judge_result,
                 pull_request=pull_request,
                 email_sent=email_sent,
                 email_error=email_error,

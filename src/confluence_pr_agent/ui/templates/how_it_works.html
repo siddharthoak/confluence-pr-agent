@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  /* Decorative, looping summary of the pipeline -- purely for a demo's
+     opening "wow" moment. Pure CSS (no JS): a shared 14s keyframe cycle
+     (7 stages x 2s) applied to every node/caption with an increasing
+     positive animation-delay staggers them into a self-running sequence.
+     The accurate, data-backed version is the .flow diagram right below,
+     built from pipeline/stages.py -- this one is intentionally just for
+     visual rhythm, so its captions are hand-written, not sourced from
+     STAGE_LABELS, and it's aria-hidden so screen readers go straight to
+     the real content. */
+  .journey {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 2.1rem 1.75rem 1.75rem;
+    margin-bottom: 1.75rem;
+    overflow: hidden;
+  }
+  .journey-track {
+    position: relative;
+    height: 4px;
+    background: var(--border);
+    border-radius: 999px;
+    margin: 0 16px;
+  }
+  .journey-fill {
+    position: absolute;
+    inset: 0;
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent-blue), var(--accent));
+    border-radius: 999px;
+    animation: journey-fill 14s linear infinite;
+  }
+  .journey-nodes {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .journey-node {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--bg-elevated);
+    border: 2px solid var(--border);
+    flex-shrink: 0;
+    animation: journey-node-pulse 14s ease infinite;
+  }
+  .journey-captions {
+    position: relative;
+    height: 2.4rem;
+    margin-top: 1.75rem;
+    text-align: center;
+  }
+  .journey-caption {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: var(--text);
+    opacity: 0;
+    animation: journey-caption-fade 14s ease infinite;
+  }
+
+  @keyframes journey-fill { from { width: 0%; } to { width: 100%; } }
+  @keyframes journey-node-pulse {
+    0%, 100% { border-color: var(--border); background: var(--bg-elevated); box-shadow: none; transform: scale(1); }
+    1.5%, 11% { border-color: var(--accent-blue); background: var(--accent-blue); box-shadow: 0 0 0 6px rgba(91, 156, 230, 0.22); transform: scale(1.3); }
+    14.28% { border-color: var(--border); background: var(--bg-elevated); box-shadow: none; transform: scale(1); }
+  }
+  @keyframes journey-caption-fade {
+    0%, 100% { opacity: 0; transform: translateY(8px); }
+    1.5%, 11% { opacity: 1; transform: translateY(0); }
+    14.28% { opacity: 0; transform: translateY(-8px); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .journey-fill, .journey-node, .journey-caption { animation: none !important; }
+    .journey-fill { width: 14.28%; }
+    .journey-node:first-of-type { border-color: var(--accent-blue); background: var(--accent-blue); }
+    .journey-caption:first-of-type { opacity: 1; }
+  }
+</style>
+
+<h1>How It Works</h1>
+<p class="subtitle">
+  A walkthrough of the pipeline, end to end -- from a Confluence spec edit to an open pull request.
+  Built for narrating live in a demo: scroll through it in order, or jump straight to
+  <a href="/ui/simulate">Simulate Webhook</a> to run it for real against a live page.
+</p>
+
+<div class="journey" aria-hidden="true">
+  <div class="journey-track">
+    <div class="journey-fill"></div>
+    <div class="journey-nodes">
+      {% for i in range(7) %}<div class="journey-node" style="animation-delay: {{ i * 2 }}s;"></div>{% endfor %}
+    </div>
+  </div>
+  <div class="journey-captions">
+    <span class="journey-caption" style="animation-delay: 0s;">A Confluence spec page changes.</span>
+    <span class="journey-caption" style="animation-delay: 2s;">Repo cloned, branch created.</span>
+    <span class="journey-caption" style="animation-delay: 4s;">AI agent implements the change.</span>
+    <span class="journey-caption" style="animation-delay: 6s;">Gate 1 -- the repo's own tests must pass.</span>
+    <span class="journey-caption" style="animation-delay: 8s;">Gate 2 -- an LLM judge reviews the diff.</span>
+    <span class="journey-caption" style="animation-delay: 10s;">Pull request opens automatically.</span>
+    <span class="journey-caption" style="animation-delay: 12s;">Team gets notified.</span>
+  </div>
+</div>
+
+<fieldset>
+  <legend>The pipeline at a glance</legend>
+  <div class="flow">
+    {% for step in flow_steps %}
+    <div class="flow-step flow-step--{{ step.state }}">
+      <div class="flow-node">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8.5L6.2 11.5L13 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div class="flow-label">{{ step.label }}</div>
+      {% if step.detail %}<div class="flow-detail">{{ step.detail }}</div>{% endif %}
+    </div>
+    {% if not loop.last %}<div class="flow-connector flow-connector--{{ step.state }}"></div>{% endif %}
+    {% endfor %}
+  </div>
+  <p class="hint" style="margin-top: 1rem;">
+    This is the exact sequence a real page change goes through -- every run on the
+    <a href="/ui/runs">Pipeline Runs</a> page is a snapshot of this same diagram, live or
+    finished.
+  </p>
+</fieldset>
+
+<fieldset>
+  <legend>1 &middot; Confluence page changes</legend>
+  <p style="line-height: 1.6; margin: 0 0 0.6rem;">
+    A Confluence spec page is edited and saved. Confluence sends a webhook (or, for a demo,
+    <a href="/ui/simulate">Simulate Webhook</a> triggers the same code path manually). The agent
+    fetches the page's current content and diffs it against the last version it successfully
+    processed -- computed as a <strong>unified diff of the page's plain-text content</strong>, not
+    raw HTML, so formatting-only edits don't trigger a false change.
+  </p>
+  <p class="hint" style="margin: 0;">
+    If Confluence label filtering is configured, a page without at least one allowed label is
+    ignored here before any repo work happens. If the version bumped but the content is
+    unchanged (e.g. a metadata-only edit), the run also stops here.
+  </p>
+</fieldset>
+
+<fieldset>
+  <legend>2 &middot; Clone the target repo</legend>
+  <p style="line-height: 1.6; margin: 0;">
+    The pipeline clones <code>{{ settings.target_repo }}</code> at its base branch
+    (<code>{{ settings.target_repo_base_branch }}</code>) into a fresh working directory and
+    creates a new branch for this change -- one clone per run, so nothing from a previous or
+    concurrent run leaks in.
+  </p>
+</fieldset>
+
+<fieldset>
+  <legend>3 &middot; An AI agent implements the change</legend>
+  <p style="line-height: 1.6; margin: 0 0 0.6rem;">
+    A pluggable coding agent reads the repo, understands its conventions, and implements the
+    spec change directly -- writing or updating tests as part of the same change, not as an
+    afterthought. This run is currently configured to use
+    <strong>{{ settings.change_agent_engine }}</strong>, but the choice (Claude Code, Cursor,
+    GitHub Copilot, Codex, Gemini, Antigravity) is a config switch, not a code change -- see
+    Configuration.
+  </p>
+  <p class="hint" style="margin: 0;">
+    If the agent fails outright, or makes no file changes at all, the run stops here with
+    nothing pushed anywhere.
+  </p>
+</fieldset>
+
+<fieldset>
+  <legend>4 &middot; Gate #1 -- the repo's own tests</legend>
+  <p style="line-height: 1.6; margin: 0 0 0.6rem;">
+    The target repo's own test command (<code>{{ settings.target_repo_test_command }}</code>)
+    runs against the change, unmodified. This is a <strong>mechanical</strong> check: does the
+    code still work, by the repo's own definition of "works"? A failure blocks the PR entirely --
+    the run ends as <span class="badge badge-tests_failed">Tests Failed</span> and the
+    Confluence page version is deliberately <em>not</em> marked as processed, so the exact same
+    diff is retried on the next webhook rather than silently dropped.
+  </p>
+</fieldset>
+
+<fieldset>
+  <legend>5 &middot; Gate #2 -- LLM Judge review</legend>
+  <p style="line-height: 1.6; margin: 0 0 0.6rem;">
+    Passing tests doesn't prove the spec was actually implemented -- a green suite can't tell
+    the difference between "correct" and "coincidentally didn't break anything." This gate is a
+    <strong>semantic</strong> check: an independent model
+    ({% if settings.judge_enabled %}currently <strong>{{ settings.judge_provider }}</strong>{% else %}currently <strong>disabled</strong>{% endif %})
+    is shown the spec change, the agent's own summary, and the actual code diff, and has to
+    decide -- does this diff really do what the spec asked, scoped to just that change, with
+    tests that exercise the new behavior? It can still say no even after tests pass.
+  </p>
+  <p style="line-height: 1.6; margin: 0 0 0.6rem;">
+    A rejection ends the run as <span class="badge badge-judge_rejected">Judge Rejected</span>
+    with its written reasoning and specific concerns attached to the run -- same
+    not-marked-as-processed retry behavior as a test failure. If the judge's own API call isn't
+    configured or fails, this step fails open (skips the review) rather than blocking a change
+    that otherwise passed its own tests -- a second opinion that's unavailable shouldn't cost a
+    good PR.
+  </p>
+  <p class="hint" style="margin: 0;">
+    Independent of the change engine on purpose, in both provider and model, so it isn't the
+    same model grading its own work. Toggle it, and switch between Anthropic and OpenAI, from
+    Configuration.
+  </p>
+</fieldset>
+
+<fieldset>
+  <legend>6 &middot; Pull request opens</legend>
+  <p style="line-height: 1.6; margin: 0;">
+    Once both gates pass, the change is committed, pushed to its own branch, and a PR opens
+    against <code>{{ settings.target_repo_base_branch }}</code> -- titled after the spec page,
+    with the agent's summary and the list of changed files in the description, and a link back
+    to the source Confluence page. Only now does the pipeline record this page version as
+    processed.
+  </p>
+</fieldset>
+
+<fieldset>
+  <legend>7 &middot; Team notified</legend>
+  <p style="line-height: 1.6; margin: 0;">
+    A summary email goes out to the configured recipients with the spec diff, the change
+    summary, and a link to the PR. This step is best-effort and deliberately isolated from
+    everything before it -- an unconfigured or failing email step never turns an already-opened
+    PR into a reported failure; it just shows up as "not sent" on the run.
+  </p>
+</fieldset>
+
+<p style="text-align: center; margin: 2rem 0 1rem;">
+  <a href="/ui/simulate" style="display: inline-block; background: var(--accent); color: white; padding: 0.7rem 1.6rem; border-radius: 999px; font-size: 0.9rem; font-weight: 600; text-decoration: none;">Run this on a real page &rarr;</a>
+</p>
+{% endblock %}

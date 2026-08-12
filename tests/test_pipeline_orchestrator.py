@@ -5,7 +5,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from confluence_pr_agent.confluence.diff import _to_plain_text, compute_checksum
-from confluence_pr_agent.models import ChangeAgentResult, PageSnapshot, PullRequestResult, RepoTestResult
+from confluence_pr_agent.models import (
+    ChangeAgentResult,
+    JudgeResult,
+    PageSnapshot,
+    PullRequestResult,
+    RepoTestResult,
+)
 from confluence_pr_agent.pipeline import orchestrator
 from confluence_pr_agent.pipeline.orchestrator import PipelineDeps, run_pipeline
 from confluence_pr_agent.storage.page_store import PageStore, StoredPage
@@ -55,6 +61,11 @@ def _make_deps(settings, *, page: PageSnapshot) -> PipelineDeps:
         success=True, summary="Added PayPal support."
     )
 
+    judge = AsyncMock()
+    judge.evaluate.return_value = JudgeResult(
+        verdict="approved", reasoning="Diff matches the spec change.", concerns=[]
+    )
+
     return PipelineDeps(
         settings=settings,
         confluence=confluence,
@@ -64,6 +75,7 @@ def _make_deps(settings, *, page: PageSnapshot) -> PipelineDeps:
         sendgrid=sendgrid,
         change_engine=change_engine,
         run_store=RunStore(settings.runs_store_path),
+        judge=judge,
     )
 
 
@@ -223,6 +235,98 @@ async def test_failing_tests_blocks_pr_and_does_not_advance_store(settings, monk
     runs = deps.run_store.list_runs()
     assert "ModuleNotFoundError" in runs[0]["test_output"]
     assert runs[0]["current_stage"] == "run_tests"
+
+
+async def test_judge_rejection_blocks_pr_and_does_not_advance_store(settings, monkeypatch):
+    page = _page(2, body="<p>spec v2</p>")
+    deps = _make_deps(settings, page=page)
+    deps.store.put(_stored(1, "<p>spec v1</p>", page.url))
+    deps.judge.evaluate.return_value = JudgeResult(
+        verdict="rejected",
+        reasoning="The diff only stubs out the PayPal button; no actual checkout logic was added.",
+        concerns=["No server-side handling of the PayPal callback."],
+    )
+
+    async def _fake_run_tests(repo_dir, command):
+        return RepoTestResult(passed=True, output="2 passed", command=command)
+
+    monkeypatch.setattr(orchestrator, "run_tests", _fake_run_tests)
+
+    result = await run_pipeline("123456", deps=deps)
+
+    assert result.status == "judge_rejected"
+    deps.github.open_pull_request.assert_not_called()
+    deps.sendgrid.send_email.assert_not_called()
+
+    stored = deps.store.get("123456")
+    assert stored is not None
+    assert stored["version"] == 1  # not advanced -- retried from the same diff next time
+
+    runs = deps.run_store.list_runs()
+    assert runs[0]["current_stage"] == "llm_judge"
+    assert runs[0]["judge_verdict"] == "rejected"
+    assert "PayPal callback" in runs[0]["judge_concerns"][0]
+
+
+async def test_judge_skipped_without_anthropic_key_still_opens_pr(settings, monkeypatch):
+    settings.anthropic_api_key = ""
+    page = _page(2, body="<p>spec v2</p>")
+    deps = _make_deps(settings, page=page)
+    deps.store.put(_stored(1, "<p>spec v1</p>", page.url))
+
+    async def _fake_run_tests(repo_dir, command):
+        return RepoTestResult(passed=True, output="2 passed", command=command)
+
+    monkeypatch.setattr(orchestrator, "run_tests", _fake_run_tests)
+
+    result = await run_pipeline("123456", deps=deps)
+
+    assert result.status == "opened_pr"
+    deps.judge.evaluate.assert_not_called()
+
+    runs = deps.run_store.list_runs()
+    assert runs[0]["judge_verdict"] == "skipped"
+
+
+async def test_judge_disabled_is_never_invoked(settings, monkeypatch):
+    settings.judge_enabled = False
+    page = _page(2, body="<p>spec v2</p>")
+    deps = _make_deps(settings, page=page)
+    deps.store.put(_stored(1, "<p>spec v1</p>", page.url))
+
+    async def _fake_run_tests(repo_dir, command):
+        return RepoTestResult(passed=True, output="2 passed", command=command)
+
+    monkeypatch.setattr(orchestrator, "run_tests", _fake_run_tests)
+
+    result = await run_pipeline("123456", deps=deps)
+
+    assert result.status == "opened_pr"
+    deps.judge.evaluate.assert_not_called()
+
+    runs = deps.run_store.list_runs()
+    assert runs[0]["judge_verdict"] is None
+
+
+async def test_judge_call_failure_fails_open_and_still_opens_pr(settings, monkeypatch):
+    page = _page(2, body="<p>spec v2</p>")
+    deps = _make_deps(settings, page=page)
+    deps.store.put(_stored(1, "<p>spec v1</p>", page.url))
+    deps.judge.evaluate.side_effect = RuntimeError("connection reset")
+
+    async def _fake_run_tests(repo_dir, command):
+        return RepoTestResult(passed=True, output="2 passed", command=command)
+
+    monkeypatch.setattr(orchestrator, "run_tests", _fake_run_tests)
+
+    result = await run_pipeline("123456", deps=deps)
+
+    assert result.status == "opened_pr"
+    assert result.pull_request is not None
+
+    runs = deps.run_store.list_runs()
+    assert runs[0]["judge_verdict"] == "skipped"
+    assert "connection reset" in runs[0]["judge_reasoning"]
 
 
 async def test_change_engine_failure_does_not_open_pr(settings):

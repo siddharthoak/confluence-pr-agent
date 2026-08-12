@@ -35,4 +35,9 @@ def settings(tmp_path: Path) -> Settings:
         email_from_address="agent@example.com",
         email_to_addresses="team@example.com,lead@example.com",
         data_dir=str(tmp_path / "data"),
+        # Explicit, not left to fall through to a real developer .env (which
+        # config.py's load_dotenv(override=True) folds into os.environ on
+        # import): a local .env with e.g. CONFLUENCE_ALLOWED_LABELS set for
+        # real usage would otherwise silently leak into every test run.
+        confluence_allowed_labels="",
     )

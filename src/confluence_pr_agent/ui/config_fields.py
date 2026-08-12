@@ -80,10 +80,36 @@ CONFIG_FIELDS: list[ConfigField] = [
         "CHANGE_AGENT_MAX_TURNS", "Max turns / timeout budget", "Change engine", input_type="number",
         placeholder="30",
     ),
-    ConfigField("ANTHROPIC_API_KEY", "Anthropic API key (claude_code)", "Change engine", secret=True),
+    ConfigField(
+        "ANTHROPIC_API_KEY", "Anthropic API key (claude_code)", "Change engine", secret=True,
+        help_text="Also used by the LLM Judge review gate below when its provider is set to Anthropic.",
+    ),
     ConfigField("CURSOR_API_KEY", "Cursor API key (cursor)", "Change engine", secret=True),
-    ConfigField("OPENAI_API_KEY", "OpenAI API key (codex)", "Change engine", secret=True),
+    ConfigField(
+        "OPENAI_API_KEY", "OpenAI API key (codex)", "Change engine", secret=True,
+        help_text="Also used by the LLM Judge review gate below when its provider is set to OpenAI.",
+    ),
     ConfigField("GEMINI_API_KEY", "Gemini API key (gemini)", "Change engine", secret=True),
+    # LLM judge
+    ConfigField(
+        "JUDGE_ENABLED", "LLM Judge review gate", "LLM Judge", input_type="select", options=["true", "false"],
+        help_text=(
+            "After tests pass, an independent LLM call reviews the actual code diff against the "
+            "Confluence spec change and can still reject it before a PR opens -- catches diffs that pass "
+            "tests without correctly implementing the spec, or that touch unrelated files. Independent of "
+            "the change engine above by design, so it isn't the same model grading its own work. If the "
+            "selected provider's API key isn't set (or the call fails), this step is skipped rather than "
+            "blocking the PR."
+        ),
+    ),
+    ConfigField(
+        "JUDGE_PROVIDER", "LLM Judge provider", "LLM Judge", input_type="select", options=["anthropic", "openai"],
+        help_text="Uses the matching API key above (Anthropic or OpenAI) -- not tied to CHANGE_AGENT_ENGINE.",
+    ),
+    ConfigField(
+        "JUDGE_MODEL", "LLM Judge model", "LLM Judge",
+        placeholder="blank = provider default (claude-sonnet-5 / gpt-4.1)",
+    ),
     # Email
     ConfigField("SENDGRID_API_KEY", "SendGrid API key", "Email", secret=True),
     ConfigField("EMAIL_FROM_ADDRESS", "From address", "Email", placeholder="confluence-pr-agent@example.com"),

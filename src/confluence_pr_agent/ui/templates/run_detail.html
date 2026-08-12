@@ -88,6 +88,21 @@
   </fieldset>
   {% endif %}
 
+  {% if run.judge_verdict %}
+  <fieldset>
+    <legend>LLM Judge Review</legend>
+    <p style="margin: 0 0 0.6rem;">
+      <span class="badge badge-{{ 'opened_pr' if run.judge_verdict == 'approved' else 'judge_rejected' if run.judge_verdict == 'rejected' else 'no_change_detected' }}">{{ run.judge_verdict | capitalize }}</span>
+    </p>
+    <p style="white-space: pre-wrap; line-height: 1.6; margin: 0;">{{ run.judge_reasoning }}</p>
+    {% if run.judge_concerns %}
+    <ul style="margin: 0.75rem 0 0; padding-left: 1.2rem; line-height: 1.8;">
+      {% for c in run.judge_concerns %}<li>{{ c }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </fieldset>
+  {% endif %}
+
   {% if run.files_changed %}
   <fieldset>
     <legend>Files changed ({{ run.files_changed|length }})</legend>

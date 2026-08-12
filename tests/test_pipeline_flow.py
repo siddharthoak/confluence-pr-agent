@@ -16,6 +16,9 @@ def _run(**overrides) -> dict:
         "pr_number": None,
         "email_sent": False,
         "email_error": None,
+        "judge_verdict": None,
+        "judge_reasoning": None,
+        "judge_concerns": [],
     }
     base.update(overrides)
     return base
@@ -74,7 +77,15 @@ def test_tests_failed_marks_run_tests_failed_and_later_stages_skipped():
 
 
 def test_opened_pr_marks_everything_done_including_email_when_sent():
-    steps = build_flow_steps(_run(status="opened_pr", current_stage="send_email", email_sent=True, pr_number=7))
+    steps = build_flow_steps(
+        _run(
+            status="opened_pr",
+            current_stage="send_email",
+            email_sent=True,
+            pr_number=7,
+            judge_verdict="approved",
+        )
+    )
     states = {s["key"]: s["state"] for s in steps}
 
     for key in STAGE_KEYS:
@@ -88,6 +99,33 @@ def test_opened_pr_marks_email_skipped_when_not_sent():
     states = {s["key"]: s["state"] for s in steps}
 
     assert states["open_pr"] == "done"
+    assert states["send_email"] == "skipped"
+
+
+def test_opened_pr_marks_judge_skipped_when_no_verdict_recorded():
+    """Judge disabled, or skipped for missing config -- either way there's no
+    judge_verdict in the run, and the step should read as skipped rather than
+    falsely "done" (which the naive "everything before send_email is done"
+    rule would otherwise say for a status="opened_pr" run).
+    """
+    steps = build_flow_steps(
+        _run(status="opened_pr", current_stage="send_email", email_sent=True, judge_verdict=None)
+    )
+    states = {s["key"]: s["state"] for s in steps}
+
+    assert states["llm_judge"] == "skipped"
+    assert states["open_pr"] == "done"
+
+
+def test_judge_rejected_marks_llm_judge_failed_and_later_stages_skipped():
+    steps = build_flow_steps(
+        _run(status="judge_rejected", current_stage="llm_judge", judge_verdict="rejected")
+    )
+    states = {s["key"]: s["state"] for s in steps}
+
+    assert states["run_tests"] == "done"
+    assert states["llm_judge"] == "failed"
+    assert states["open_pr"] == "skipped"
     assert states["send_email"] == "skipped"
 
 

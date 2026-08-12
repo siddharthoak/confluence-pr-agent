@@ -227,6 +227,7 @@
   }
   .badge-opened_pr { background: var(--success-bg); color: var(--success-text); border-color: var(--success-border); }
   .badge-tests_failed { background: var(--error-bg); color: var(--error-text); border-color: var(--error-border); }
+  .badge-judge_rejected { background: var(--error-bg); color: var(--error-text); border-color: var(--error-border); }
   .badge-error { background: var(--error-bg); color: var(--error-text); border-color: var(--error-border); }
   .badge-no_change_detected { background: var(--neutral-bg); color: var(--neutral-text); }
   .badge-ignored { background: var(--neutral-bg); color: var(--neutral-text); }
@@ -337,6 +338,7 @@
     <span class="brand-name">confluence-pr-agent<span class="dim"> · spec-to-PR pipeline</span></span>
   </div>
   <nav>
+    <a href="/ui/how-it-works" class="{{ 'active' if request.url.path == '/ui/how-it-works' else '' }}">How It Works</a>
     <a href="/ui/runs" class="{{ 'active' if request.url.path == '/ui/runs' else '' }}">Pipeline Runs</a>
     <a href="/ui/simulate" class="{{ 'active' if request.url.path == '/ui/simulate' else '' }}">Simulate Webhook</a>
     <a href="/ui/config" class="{{ 'active' if request.url.path == '/ui/config' else '' }}">Configuration</a>
