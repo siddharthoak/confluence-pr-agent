@@ -1,10 +1,29 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  .env-loader {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+  .env-loader .hint { flex: 1 1 260px; margin: 0; }
+</style>
 <h1>Configuration</h1>
 <p class="subtitle">Edits write directly to <code>.env</code> and take effect immediately — no restart needed. Secret fields never show their current value; leave one blank to keep it unchanged.</p>
 
 {% if saved %}<div class="banner banner-ok">Saved.</div>{% endif %}
 {% if error %}<div class="banner banner-error">{{ error }}</div>{% endif %}
+
+<div class="env-loader">
+  <input type="file" id="env-file-input" accept=".env,.txt" style="display: none;">
+  <button type="button" id="env-file-btn" class="btn-secondary">Load from .env file</button>
+  <span id="env-load-result" class="hint" style="margin-top: 0;">
+    Populates every field below from a local file (e.g. an existing <code>.env</code>) in one
+    go, across all tabs — nothing is written until you click Save.
+  </span>
+</div>
 
 <form method="post" action="/ui/config">
   <div class="tab-bar" role="tablist">
@@ -196,7 +215,113 @@
         }
       });
 
+      // The "Load from .env file" button below sets this hidden input's
+      // .value directly (plain string assignment, same as any other field)
+      // and then dispatches a "change" event on it -- that's the hook that
+      // gets the visible chips to actually refresh, since setting .value
+      // alone never fires anything on its own.
+      hiddenInput.addEventListener("change", render);
+
       render();
+    });
+  }
+
+  // Populates every field on this page from a local .env-style file in one
+  // go, entirely client-side (no upload, nothing hits the server until
+  // Save) -- same pattern as the config picker in
+  // AI_in_QA/deployment/smart_automation_service. Unlike that one, no
+  // static KEY -> element-id map is needed here: every field's `name`/`id`
+  // already *is* its env var name (see ui/config_fields.py), so a parsed
+  // KEY matches its input via a plain getElementById(KEY).
+  function parseEnvText(text) {
+    const found = {};
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) continue;
+      const eq = line.indexOf("=");
+      if (eq === -1) continue;
+      const key = line.slice(0, eq).trim();
+      let value = line.slice(eq + 1).trim();
+      // Strip one layer of matching quotes -- real .env files commonly
+      // wrap values in them (KEY="value with spaces"), but the form
+      // fields themselves want the raw value, not the quote characters.
+      if (value.length >= 2) {
+        const first = value[0], last = value[value.length - 1];
+        if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+          value = value.slice(1, -1);
+        }
+      }
+      if (key) found[key] = value;
+    }
+    return found;
+  }
+
+  function applyEnvValues(found) {
+    const applied = [];
+    const ignored = [];
+
+    // Applied first and its dependent UI resynced immediately -- otherwise
+    // a file that sets both CHANGE_AGENT_ENGINE/REPO_PROVIDER and their
+    // matching credential field would populate the credential into a
+    // field that's still hidden (or, for JUDGE_MODEL, into an <option>
+    // list still built for the *previous* JUDGE_PROVIDER).
+    const priorityKeys = ["CHANGE_AGENT_ENGINE", "REPO_PROVIDER", "JUDGE_PROVIDER"];
+    const orderedKeys = [
+      ...priorityKeys.filter((k) => k in found),
+      ...Object.keys(found).filter((k) => !priorityKeys.includes(k)),
+    ];
+
+    for (const key of orderedKeys) {
+      const el = document.getElementById(key);
+      if (!el) {
+        ignored.push(key);
+        continue;
+      }
+      if (el.tagName === "SELECT") {
+        const hasOption = Array.from(el.options).some((o) => o.value === found[key]);
+        if (!hasOption) {
+          ignored.push(key + " (not a valid option)");
+          continue;
+        }
+      }
+      el.value = found[key];
+      el.dispatchEvent(new Event("change"));
+      applied.push(key);
+      if (key === "CHANGE_AGENT_ENGINE") syncEngineFields();
+      if (key === "REPO_PROVIDER") syncRepoFields();
+      if (key === "JUDGE_PROVIDER") syncJudgeModelOptions();
+    }
+
+    return { applied, ignored };
+  }
+
+  function initEnvFileLoader() {
+    const fileInput = document.getElementById("env-file-input");
+    const triggerBtn = document.getElementById("env-file-btn");
+    const resultEl = document.getElementById("env-load-result");
+    if (!fileInput || !triggerBtn || !resultEl) return;
+
+    triggerBtn.addEventListener("click", () => fileInput.click());
+
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        const { applied, ignored } = applyEnvValues(parseEnvText(String(reader.result)));
+        let message = `Loaded ${applied.length} field${applied.length === 1 ? "" : "s"} from "${file.name}".`;
+        if (ignored.length) {
+          message += ` Skipped ${ignored.length} unrecognized key${ignored.length === 1 ? "" : "s"}: ${ignored.join(", ")}.`;
+        }
+        message += " Review below, then click Save.";
+        resultEl.textContent = message;
+        fileInput.value = ""; // lets the same file be picked again later
+      };
+      reader.onerror = () => {
+        resultEl.textContent = `Could not read "${file.name}": ${reader.error}.`;
+      };
+      reader.readAsText(file);
     });
   }
 
@@ -211,6 +336,7 @@
     const judgeProviderSelect = document.getElementById("JUDGE_PROVIDER");
     if (judgeProviderSelect) judgeProviderSelect.addEventListener("change", syncJudgeModelOptions);
     initTagLists();
+    initEnvFileLoader();
   });
 </script>
 {% endblock %}
