@@ -62,3 +62,31 @@ class PageStore:
             data = self._read()
             data[page["page_id"]] = page
             self._write(data)
+
+    def remember_jira_issue(self, page_id: str, issue_key: str) -> None:
+        """Persists just the Jira story key for this page, independent of
+        whether the rest of the pipeline run succeeds -- so a run that
+        creates (or finds) a story but then fails downstream (change engine
+        crash, failing tests, ...) doesn't lose track of it and create a
+        duplicate on the next retry, before put() above ever gets called.
+        Deliberately a merge, not put()'s full replace: version/
+        body_checksum/body_html/open_pr_* are left untouched, so
+        confluence/diff.py::compute_diff still correctly treats this page as
+        unresolved and keeps retrying until a run actually succeeds through
+        to put(). No-op if there's no prior record at all yet -- this page's
+        very first version, first run ever -- since a full record needs a
+        real version/body_checksum/body_html and put() is what supplies
+        those; that specific edge case (a story created on the very first
+        run, which then fails before put()) stays unfixed, but it's rare
+        enough (every page here has necessarily gone through at least one
+        successful run already once it has any config at all) not to be
+        worth a synthetic placeholder record.
+        """
+        with self._lock:
+            data = self._read()
+            existing = data.get(page_id)
+            if existing is None:
+                return
+            existing["jira_issue_key"] = issue_key
+            data[page_id] = existing
+            self._write(data)

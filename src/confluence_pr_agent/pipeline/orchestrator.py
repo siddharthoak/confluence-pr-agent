@@ -394,32 +394,60 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
         # jira/story_writer.py), so a subsequent failure anywhere downstream
         # still has a durable place to record what went wrong (see
         # _sync_jira_on_finish). If a story from a previous still-open run
-        # for this page is still open, comment on it instead of creating a
-        # duplicate -- mirrors the PR-branch reuse check below. Fails open
-        # like every other external call here: a Jira outage never blocks
-        # the rest of the pipeline.
+        # for this page is still open, update it instead of creating a
+        # duplicate -- mirrors the PR-branch reuse check below.
+        #
+        # Every step below is independently try/excepted rather than one
+        # broad try around the whole block on purpose: a real duplicate-story
+        # bug used to live here -- a *follow-up* call (posting the diff
+        # comment, or the AI-suggested-complexity comment) throwing was
+        # caught by one shared except that reset `jira_issue = None`,
+        # discarding the reference to the story that had just been
+        # successfully created (or found) moments earlier. The next run then
+        # had no memory of it and created a fresh duplicate. Each step here
+        # can fail on its own -- logged, fails open -- without erasing
+        # jira_issue once it's been set.
         mark_stage("create_jira_story")
         if settings.jira_enabled and settings.jira_base_url and settings.jira_project_key:
-            try:
-                existing_key = previous_page.get("jira_issue_key") if previous_page else None
-                if existing_key:
-                    try:
-                        existing_status = await deps.jira.get_issue_status(existing_key)
-                        if existing_status.is_open:
-                            jira_issue = JiraIssueResult(
-                                key=existing_status.key,
-                                url=f"{settings.jira_base_url.rstrip('/')}/browse/{existing_status.key}",
-                            )
-                            jira_reused = True
-                    except Exception as exc:
-                        logger.warning(
-                            "Could not check status of existing Jira story %s for page %s; "
-                            "creating a new one instead: %s",
-                            existing_key, page_id, exc,
+            existing_key = previous_page.get("jira_issue_key") if previous_page else None
+            if existing_key:
+                try:
+                    existing_status = await deps.jira.get_issue_status(existing_key)
+                    if existing_status.is_open:
+                        jira_issue = JiraIssueResult(
+                            key=existing_status.key,
+                            url=f"{settings.jira_base_url.rstrip('/')}/browse/{existing_status.key}",
                         )
+                        jira_reused = True
+                except Exception as exc:
+                    logger.warning(
+                        "Could not check status of existing Jira story %s for page %s; "
+                        "creating a new one instead: %s",
+                        existing_key, page_id, exc,
+                    )
 
-                if jira_issue is None:
-                    story = await generate_story_content(settings, diff)
+            # Generated either way: refreshes a reused story's description,
+            # or seeds a brand-new one's.
+            story = await generate_story_content(settings, diff)
+
+            if jira_issue is not None:
+                # Reuse path -- keep the story's description in sync with
+                # the latest spec state (previously left stale from whenever
+                # it was first created) and leave a visible trail of what
+                # changed this time, same as a brand-new story gets below.
+                try:
+                    await deps.jira.update_description(jira_issue.key, story.description, story.acceptance_criteria)
+                except Exception as exc:
+                    logger.warning("Failed to refresh description for Jira story %s: %s", jira_issue.key, exc)
+                try:
+                    diff_comment = (
+                        f"Spec diff (v{diff.previous_version} -> v{page.version}):\n\n{diff.diff_text[:8000]}"
+                    )
+                    await deps.jira.add_comment(jira_issue.key, diff_comment)
+                except Exception as exc:
+                    logger.warning("Failed to comment the spec diff on Jira story %s: %s", jira_issue.key, exc)
+            else:
+                try:
                     jira_issue = await deps.jira.create_issue(
                         project_key=settings.jira_project_key,
                         issue_type=settings.jira_issue_type,
@@ -428,6 +456,13 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                         acceptance_criteria=story.acceptance_criteria,
                     )
                     logger.info("Created Jira story %s for page %s", jira_issue.key, page_id)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to create a Jira story for page %s; continuing without one: %s", page_id, exc
+                    )
+                    jira_issue = None
+
+                if jira_issue is not None:
                     # The raw spec diff as a follow-up comment, not part of
                     # the description -- the description is meant to be
                     # readable at a glance (prose, from an LLM when one's
@@ -435,24 +470,37 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                     # isn't); a unified diff dumped into that same field
                     # defeats that regardless of which one produced it. This
                     # comment is where the exact technical detail lives.
-                    if diff.is_first_seen:
-                        diff_comment = f"Full current spec, as of v{page.version}:\n\n{diff.diff_text[:8000]}"
-                    else:
-                        diff_comment = (
-                            f"Spec diff (v{diff.previous_version} -> v{page.version}):\n\n{diff.diff_text[:8000]}"
+                    try:
+                        if diff.is_first_seen:
+                            diff_comment = f"Full current spec, as of v{page.version}:\n\n{diff.diff_text[:8000]}"
+                        else:
+                            diff_comment = (
+                                f"Spec diff (v{diff.previous_version} -> v{page.version}):\n\n{diff.diff_text[:8000]}"
+                            )
+                        await deps.jira.add_comment(jira_issue.key, diff_comment)
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to comment the spec diff on new Jira story %s: %s", jira_issue.key, exc
                         )
-                    await deps.jira.add_comment(jira_issue.key, diff_comment)
                     if settings.jira_suggest_story_points and story.complexity:
-                        await deps.jira.add_comment(
-                            jira_issue.key,
-                            f"AI-suggested complexity: {story.complexity} -- {story.complexity_reason}",
-                        )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to create/reuse a Jira story for page %s; continuing without one: %s", page_id, exc
-                )
-                jira_issue = None
-                jira_reused = False
+                        try:
+                            await deps.jira.add_comment(
+                                jira_issue.key,
+                                f"AI-suggested complexity: {story.complexity} -- {story.complexity_reason}",
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed to comment AI-suggested complexity on Jira story %s: %s",
+                                jira_issue.key, exc,
+                            )
+
+            if jira_issue is not None:
+                # Durable even if everything below this point fails (change
+                # engine crash, failing tests, ...) -- see
+                # PageStore.remember_jira_issue's docstring for why this is a
+                # merge, not the full put() that happens on a complete
+                # success further down.
+                deps.store.remember_jira_issue(page_id, jira_issue.key)
 
         repo_dir = settings.workdirs_path / f"page-{page_id}-v{page.version}"
 

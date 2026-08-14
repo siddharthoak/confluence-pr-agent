@@ -63,6 +63,22 @@ class JiraClient:
         key = resp.json()["key"]
         return JiraIssueResult(key=key, url=self._issue_url(key))
 
+    async def update_description(
+        self, issue_key: str, description: str, acceptance_criteria: list[str] | None = None
+    ) -> None:
+        """Refreshes an existing (reused) story's description in place, so it
+        reflects the latest spec state instead of staying stuck with whatever
+        it said when the story was first created. See pipeline/orchestrator.py
+        -- called on the reuse path, alongside a comment recording the exact
+        diff, same as a brand-new story gets.
+        """
+        resp = await self._client.put(
+            f"{self._base_url}/rest/api/{API_VERSION}/issue/{issue_key}",
+            auth=self._auth,
+            json={"fields": {"description": build_story_description_adf(description, acceptance_criteria or [])}},
+        )
+        resp.raise_for_status()
+
     async def add_comment(self, issue_key: str, comment: str) -> None:
         resp = await self._client.post(
             f"{self._base_url}/rest/api/{API_VERSION}/issue/{issue_key}/comment",

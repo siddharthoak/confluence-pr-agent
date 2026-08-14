@@ -39,8 +39,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Confluence-to-PR Change Agent",
-    description="Receives Confluence page-updated webhooks and drives the spec-to-PR pipeline.",
+    title="Driftbridge",
+    description="Receives Confluence page-updated webhooks and bridges the drift between spec and code.",
     lifespan=lifespan,
 )
 app.include_router(ui_router)

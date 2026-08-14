@@ -317,8 +317,103 @@ async def test_jira_reuses_still_open_story_instead_of_creating_a_new_one(settin
     assert result.jira_issue.key == "SD-9"
     assert result.jira_reused is True
     deps.jira.create_issue.assert_not_called()
-    deps.jira.add_comment.assert_awaited_once()
-    assert deps.jira.add_comment.await_args.args[0] == "SD-9"
+
+    # Reusing a story now refreshes its description with the latest spec
+    # state (instead of leaving it stuck with whatever it said when first
+    # created) and posts the diff as a comment, same visibility a brand-new
+    # story gets -- then a second comment for the PR link once the run
+    # finishes (_sync_jira_on_finish).
+    deps.jira.update_description.assert_awaited_once()
+    assert deps.jira.update_description.await_args.args[0] == "SD-9"
+    assert deps.jira.add_comment.await_count == 2
+    diff_call, pr_link_call = deps.jira.add_comment.await_args_list
+    assert diff_call.args[0] == "SD-9"
+    assert "Spec diff" in diff_call.args[1]
+    assert pr_link_call.args[0] == "SD-9"
+
+    # Persisted even before the run's final success -- see
+    # PageStore.remember_jira_issue.
+    stored = deps.store.get("123456")
+    assert stored is not None
+    assert stored["jira_issue_key"] == "SD-9"
+
+
+async def test_jira_story_survives_a_follow_up_comment_failure(settings, monkeypatch):
+    """Regression test for the actual duplicate-story bug: creating the
+    issue succeeds, but the *follow-up* diff comment throws. Previously one
+    shared try/except around the whole block reset jira_issue back to None
+    when that happened, discarding the reference to the story that had just
+    been created -- so the next run for this page had no memory of it and
+    created a duplicate. Now each follow-up step is independently guarded.
+    """
+    _enable_jira(settings)
+    page = _page(2, body="<p>spec v2</p>")
+    deps = _make_deps(settings, page=page)
+    deps.store.put(_stored(1, "<p>spec v1</p>", page.url))
+    deps.jira.add_comment.side_effect = RuntimeError("Jira comment API is down")
+
+    async def _fake_run_tests(repo_dir, command):
+        return RepoTestResult(passed=True, output="2 passed", command=command)
+
+    async def _fake_story(settings, diff):
+        return _FAKE_STORY
+
+    monkeypatch.setattr(orchestrator, "run_tests", _fake_run_tests)
+    monkeypatch.setattr(orchestrator, "generate_story_content", _fake_story)
+
+    result = await run_pipeline("123456", deps=deps)
+
+    assert result.status == "opened_pr"
+    # The story itself must survive even though every comment attempt on it
+    # failed -- this is the actual bug: it used to come back None here.
+    assert result.jira_issue is not None
+    assert result.jira_issue.key == "SD-1"
+
+    stored = deps.store.get("123456")
+    assert stored is not None
+    assert stored["jira_issue_key"] == "SD-1"
+
+    runs = deps.run_store.list_runs()
+    assert runs[0]["jira_issue_key"] == "SD-1"
+
+
+async def test_jira_story_key_persisted_even_if_pipeline_fails_after_creation(settings, monkeypatch):
+    """The other half of the duplicate-story bug: the story is created
+    before any code is touched, but the change engine then fails (the real
+    incident this was caught from -- a misconfigured engine CLI). Without
+    remember_jira_issue persisting the key immediately, the next retry for
+    this same unresolved page wouldn't know a story already exists and
+    would create a second one.
+    """
+    _enable_jira(settings)
+    page = _page(2, body="<p>spec v2</p>")
+    deps = _make_deps(settings, page=page)
+    deps.store.put(_stored(1, "<p>spec v1</p>", page.url))
+    deps.change_engine.implement_change.return_value = ChangeAgentResult(
+        success=False, summary="", raw_log="engine CLI not found on PATH"
+    )
+
+    async def _fake_story(settings, diff):
+        return _FAKE_STORY
+
+    monkeypatch.setattr(orchestrator, "generate_story_content", _fake_story)
+
+    result = await run_pipeline("123456", deps=deps)
+
+    assert result.status == "error"
+    assert result.jira_issue is not None
+    assert result.jira_issue.key == "SD-1"
+
+    # Persisted despite the run overall failing -- the full put() further
+    # down (which would have recorded this too) is never reached on this
+    # path, so remember_jira_issue is the only thing that saves it.
+    stored = deps.store.get("123456")
+    assert stored is not None
+    assert stored["jira_issue_key"] == "SD-1"
+    # And nothing else about the stored page moved -- still v1, so the next
+    # run's compute_diff() still correctly treats this page as unresolved
+    # and keeps retrying rather than silently giving up.
+    assert stored["version"] == 1
 
 
 async def test_jira_creation_failure_fails_open_and_still_opens_pr(settings, monkeypatch):
