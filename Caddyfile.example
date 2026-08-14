@@ -52,17 +52,64 @@
 	}
 
 	# HTTP Basic Auth has no real server-side logout -- the browser just
-	# caches the credentials for its own session. This is the standard
-	# workaround: always answer 401 with a fresh challenge, so a stale
-	# cached credential gets rejected and the browser either re-prompts or
-	# (if the person cancels) shows this page instead of the app. Not a
-	# true sign-out -- closing the browser (or clearing saved passwords) is
-	# the only way to fully forget the credentials -- but it's the best
-	# available approximation for Basic Auth. Linked from the app's own nav
-	# (base.html) as "Sign out".
+	# caches the credentials for its own session, and closing the browser
+	# (or clearing saved passwords) is the only way to fully forget them.
+	# An earlier version of this answered with a 401 + WWW-Authenticate
+	# challenge here, on the theory that it'd force a fresh prompt -- in
+	# practice that just makes the browser pop its native login dialog
+	# immediately on the /logout page itself, which reads as broken rather
+	# than "you're signed out" (confirmed by an actual user report). A
+	# plain 200 page instead: no challenge, so no popup -- just a
+	# confirmation and a link back in. That link goes through the
+	# protected handle block below like any other page, so the normal
+	# Basic Auth prompt happens there, when it's actually expected. Linked
+	# from the app's own nav (base.html) as "Sign out".
 	handle /logout {
-		header WWW-Authenticate "Basic realm=\"restricted\""
-		respond "Signed out. If your browser still prompts you back in automatically, close this tab (or all browser windows) to fully clear the cached credentials." 401
+		header Content-Type "text/html; charset=utf-8"
+		respond `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Signed out — Driftbridge</title>
+<style>
+  body {
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    background: #f6f7fb;
+    color: #232645;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    margin: 0;
+  }
+  .card {
+    background: #ffffff;
+    border: 1px solid #dbdfef;
+    border-radius: 12px;
+    padding: 2.5rem 3rem;
+    text-align: center;
+    max-width: 380px;
+  }
+  h1 { font-size: 1.3rem; margin: 0 0 0.6rem; }
+  p { color: #6b6f92; font-size: 0.9rem; line-height: 1.5; margin: 0 0 1.5rem; }
+  a.btn {
+    display: inline-block;
+    background: #e5002b;
+    color: white;
+    text-decoration: none;
+    padding: 0.65rem 1.6rem;
+    border-radius: 999px;
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+  a.btn:hover { background: #c40025; }
+</style></head>
+<body>
+  <div class="card">
+    <h1>You&#39;ve been signed out</h1>
+    <p>This is Basic Auth&#39;s usual approximation of a logout — if your browser still
+       signs you back in automatically, close this tab (or all browser windows) to
+       fully clear the cached credentials.</p>
+    <a class="btn" href="/ui/runs">Log back in</a>
+  </div>
+</body></html>` 200
 	}
 
 	handle {
