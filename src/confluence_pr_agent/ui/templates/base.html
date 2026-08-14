@@ -8,44 +8,68 @@
 <link href="https://fonts.googleapis.com/css2?family=Exo:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    /* Slate-navy, lightened a step further from the near-black first pass --
-       still a dark, professional theme, just less heavy on the eyes. */
-    --bg: #262a3d;
-    --bg-elevated: #333652;
-    --bg-elevated-2: #3b3e5c;
-    --border: #4c4f70;
-    --text: #eef0f7;
-    --text-muted: #b1b4d1;
+    /* Light, soothing two-tone theme -- a soft periwinkle-slate header band
+       (--header-bg) distinct from the airy, barely-tinted page background
+       underneath it (--bg) where the actual content/results live. Neither
+       is stark white: both carry a slight cool-slate tint so the page reads
+       as considered rather than a bare default. */
+    --header-bg: #e7eaf6;
+    --bg: #f6f7fb;
+    --bg-elevated: #ffffff;
+    --bg-elevated-2: #eef0f9;
+    --border: #dbdfef;
+    --text: #232645;
+    --text-muted: #6b6f92;
     --accent: #e5002b;
-    --accent-hover: #ff2249;
-    --accent-blue: #5b9ce6;
-    --success-bg: rgba(16, 185, 129, 0.18);
-    --success-text: #4fe0ac;
-    --success-border: rgba(79, 224, 172, 0.4);
-    --error-bg: rgba(229, 0, 43, 0.18);
-    --error-text: #ff8298;
-    --error-border: rgba(255, 130, 152, 0.4);
-    --neutral-bg: rgba(163, 167, 197, 0.16);
-    --neutral-text: #c5c8e2;
-    --warning-bg: rgba(245, 166, 35, 0.18);
-    --warning-text: #f5b83d;
-    --warning-border: rgba(245, 184, 61, 0.4);
+    --accent-hover: #c40025;
+    --accent-blue: #3468c0;
+    --success-bg: rgba(16, 185, 129, 0.12);
+    --success-text: #0e8a5f;
+    --success-border: rgba(16, 185, 129, 0.35);
+    --error-bg: rgba(220, 38, 38, 0.10);
+    --error-text: #b91c1c;
+    --error-border: rgba(220, 38, 38, 0.3);
+    --neutral-bg: rgba(107, 111, 146, 0.10);
+    --neutral-text: #565a78;
+    --warning-bg: rgba(217, 119, 6, 0.12);
+    --warning-text: #92400e;
+    --warning-border: rgba(217, 119, 6, 0.32);
   }
 
   * { box-sizing: border-box; }
 
+  html { background: var(--bg); }
+
   body {
     font-family: 'Exo', system-ui, -apple-system, sans-serif;
-    max-width: 1000px;
-    margin: 0 auto;
-    padding: 0 1.5rem 3rem;
+    margin: 0;
     color: var(--text);
     background: var(--bg);
-    background-image:
-      radial-gradient(ellipse 900px 500px at 15% -10%, rgba(91, 156, 230, 0.07), transparent 60%),
-      radial-gradient(ellipse 700px 400px at 100% 0%, rgba(229, 0, 43, 0.06), transparent 55%);
-    background-attachment: fixed;
     min-height: 100vh;
+  }
+
+  /* Full-bleed header band -- edge to edge across the viewport, visually
+     distinct from the page content beneath it. The centered 1000px column
+     lives inside .topband-inner and .page respectively, not on body itself,
+     so the two tones can each span the full browser width behind their own
+     content. */
+  .topband {
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .topband-inner {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 0 1.5rem;
+  }
+  .page {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 3rem;
+    background-image:
+      radial-gradient(ellipse 900px 500px at 15% -10%, rgba(52, 104, 192, 0.05), transparent 60%),
+      radial-gradient(ellipse 700px 400px at 100% 0%, rgba(229, 0, 43, 0.045), transparent 55%);
+    background-attachment: fixed;
   }
 
   .brand {
@@ -78,9 +102,7 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    margin-bottom: 2.25rem;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 0;
+    padding-bottom: 1rem;
   }
   nav a {
     text-decoration: none;
@@ -144,22 +166,15 @@
     padding: 0.55rem 0.75rem;
     margin-top: 0.35rem;
     border: 1px solid var(--border);
-    background: var(--bg);
+    background: var(--bg-elevated);
     color: var(--text);
     border-radius: 8px;
     box-sizing: border-box;
     font-size: 0.9rem;
     font-family: inherit;
   }
-  input::placeholder { color: #5a5e82; }
-  input:focus, select:focus { outline: none; border-color: var(--accent-blue); box-shadow: 0 0 0 3px rgba(46, 123, 214, 0.25); }
-  /* color-scheme: dark alone makes Chrome render the calendar icon in a
-     light color already suited to a dark background -- do NOT also add an
-     invert() filter on top of that (that was tried first and flips the
-     already-light icon back to dark, recreating the exact camouflage
-     problem this is fixing). */
-  input[type="date"] { color-scheme: dark; }
-  input[type="date"]::-webkit-calendar-picker-indicator { cursor: pointer; }
+  input::placeholder { color: #a6aac8; }
+  input:focus, select:focus { outline: none; border-color: var(--accent-blue); box-shadow: 0 0 0 3px rgba(52, 104, 192, 0.18); }
   select { appearance: none; }
 
   .hint { font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; line-height: 1.4; }
@@ -200,7 +215,7 @@
     font-weight: 600;
     border-radius: 6px;
   }
-  .btn-secondary:hover { background: rgba(255, 255, 255, 0.04); color: var(--text); }
+  .btn-secondary:hover { background: rgba(35, 38, 69, 0.05); color: var(--text); }
 
   .taglist-editor { margin-top: 0.35rem; }
   .taglist-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; min-height: 1.6rem; }
@@ -209,8 +224,8 @@
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
-    background: rgba(91, 156, 230, 0.14);
-    border: 1px solid rgba(91, 156, 230, 0.35);
+    background: rgba(52, 104, 192, 0.12);
+    border: 1px solid rgba(52, 104, 192, 0.32);
     color: var(--accent-blue);
     padding: 0.2rem 0.3rem 0.2rem 0.65rem;
     border-radius: 999px;
@@ -229,7 +244,7 @@
     font-size: 0.95rem;
     cursor: pointer;
   }
-  .taglist-chip-remove:hover { background: rgba(91, 156, 230, 0.25); }
+  .taglist-chip-remove:hover { background: rgba(52, 104, 192, 0.22); }
   .taglist-add-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
   .taglist-add-row .taglist-input { margin-top: 0; flex: 1; }
   .taglist-add-row .taglist-add-btn { flex-shrink: 0; }
@@ -256,7 +271,7 @@
   table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
   th, td { text-align: left; padding: 0.65rem 0.7rem; border-bottom: 1px solid var(--border); font-size: 0.85rem; vertical-align: top; }
   th { color: var(--text-muted); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
-  tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
+  tbody tr:hover { background: rgba(35, 38, 69, 0.03); }
 
   .badge {
     display: inline-block;
@@ -275,9 +290,9 @@
   .badge-ignored { background: var(--neutral-bg); color: var(--neutral-text); }
   .badge-warning { background: var(--warning-bg); color: var(--warning-text); border-color: var(--warning-border); }
   .badge-running {
-    background: rgba(91, 156, 230, 0.16);
+    background: rgba(52, 104, 192, 0.12);
     color: var(--accent-blue);
-    border-color: rgba(91, 156, 230, 0.4);
+    border-color: rgba(52, 104, 192, 0.35);
     animation: pulse-running 1.6s ease-in-out infinite;
   }
   @keyframes pulse-running {
@@ -308,13 +323,13 @@
     align-items: center;
     justify-content: center;
     border: 2px solid var(--border);
-    background: var(--bg);
+    background: var(--bg-elevated);
     color: var(--text-muted);
     font-weight: 700;
     font-size: 0.9rem;
   }
   .flow-step--done .flow-node { background: var(--success-bg); border-color: var(--success-border); color: var(--success-text); }
-  .flow-step--active .flow-node { background: rgba(91, 156, 230, 0.18); border-color: rgba(91, 156, 230, 0.5); color: var(--accent-blue); animation: pulse-running 1.6s ease-in-out infinite; }
+  .flow-step--active .flow-node { background: rgba(52, 104, 192, 0.14); border-color: rgba(52, 104, 192, 0.5); color: var(--accent-blue); animation: pulse-running 1.6s ease-in-out infinite; }
   .flow-step--failed .flow-node { background: var(--error-bg); border-color: var(--error-border); color: var(--error-text); }
   .flow-step--warning .flow-node { background: var(--warning-bg); border-color: var(--warning-border); color: var(--warning-text); }
   .flow-step--skipped .flow-node { background: var(--neutral-bg); border-color: transparent; color: var(--neutral-text); }
@@ -330,10 +345,10 @@
   .banner-ok { background: var(--success-bg); border-color: var(--success-border); color: var(--success-text); }
   .banner-error { background: var(--error-bg); border-color: var(--error-border); color: var(--error-text); }
 
-  code { background: rgba(255, 255, 255, 0.08); color: #d6d9f5; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85em; }
+  code { background: rgba(35, 38, 69, 0.07); color: #3a3d5c; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85em; }
   pre.code-block {
-    background: #131421;
-    color: #d6d9f5;
+    background: var(--bg-elevated-2);
+    color: #2b2e4a;
     border: 1px solid var(--border);
     padding: 1rem;
     border-radius: 10px;
@@ -345,7 +360,7 @@
   pre.diff-view { padding: 0.75rem 0; }
   pre.diff-view span { display: block; padding: 0.05rem 1rem; white-space: pre-wrap; word-break: break-word; }
   .diff-add { background: rgba(16, 185, 129, 0.14); color: var(--success-text); }
-  .diff-remove { background: rgba(229, 0, 43, 0.14); color: var(--error-text); }
+  .diff-remove { background: rgba(220, 38, 38, 0.12); color: var(--error-text); }
   .diff-hunk { color: var(--accent-blue); opacity: 0.85; }
   .diff-meta { color: var(--text-muted); font-weight: 600; }
   .diff-context { color: var(--text-muted); }
@@ -373,42 +388,48 @@
 </style>
 </head>
 <body>
-  <div class="brand">
-    <svg class="brand-mark" width="26" height="26" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <circle cx="6" cy="16" r="2.6" fill="#e5002b"/>
-      <circle cx="16" cy="16" r="2.6" fill="#e5002b"/>
-      <circle cx="11" cy="6" r="2.6" fill="#e5002b"/>
-      <line x1="6" y1="16" x2="11" y2="6" stroke="#e5002b" stroke-width="1.3" opacity="0.55"/>
-      <line x1="16" y1="16" x2="11" y2="6" stroke="#e5002b" stroke-width="1.3" opacity="0.55"/>
-      <line x1="6" y1="16" x2="16" y2="16" stroke="#e5002b" stroke-width="1.3" opacity="0.55"/>
-    </svg>
-    <div class="brand-text">
-      <span class="brand-name">Driftbridge</span>
-      <span class="brand-tagline">Bridges the drift between spec and code.</span>
+  <header class="topband">
+    <div class="topband-inner">
+      <div class="brand">
+        <svg class="brand-mark" width="26" height="26" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <circle cx="6" cy="16" r="2.6" fill="#e5002b"/>
+          <circle cx="16" cy="16" r="2.6" fill="#e5002b"/>
+          <circle cx="11" cy="6" r="2.6" fill="#e5002b"/>
+          <line x1="6" y1="16" x2="11" y2="6" stroke="#e5002b" stroke-width="1.3" opacity="0.55"/>
+          <line x1="16" y1="16" x2="11" y2="6" stroke="#e5002b" stroke-width="1.3" opacity="0.55"/>
+          <line x1="6" y1="16" x2="16" y2="16" stroke="#e5002b" stroke-width="1.3" opacity="0.55"/>
+        </svg>
+        <div class="brand-text">
+          <span class="brand-name">Driftbridge</span>
+          <span class="brand-tagline">Bridges the drift between spec and code.</span>
+        </div>
+      </div>
+      <nav>
+        <a href="/ui/how-it-works" class="{{ 'active' if request.url.path == '/ui/how-it-works' else '' }}">How It Works</a>
+        <a href="/ui/runs" class="{{ 'active' if request.url.path == '/ui/runs' else '' }}">Pipeline Runs</a>
+        <a href="/ui/simulate" class="{{ 'active' if request.url.path == '/ui/simulate' else '' }}">Simulate Webhook</a>
+        <a href="/ui/config" class="{{ 'active' if request.url.path == '/ui/config' else '' }}">Configuration</a>
+        <!-- request.state.username is set by ui/auth.py::current_username --
+             every /ui/* route depends on it, so it's always present here.
+             Undefined (renders as nothing) only on a page that somehow
+             reached this layout without going through that dependency. This
+             whole group is one flex row (align-items: center on nav handles
+             vertical alignment against the padded tab links to its left) so
+             the label+username and Sign out sit on the same baseline; the
+             auto margin on the group pushes it to the right edge. -->
+        <span style="margin-left: auto; display: flex; align-items: center; gap: 1rem;">
+          {% if request.state.username %}<span style="color: var(--text-muted); font-size: 0.9rem;">User: {{ request.state.username }}</span>{% endif %}
+          <!-- /logout is intercepted by Caddy (see Caddyfile.example) before it
+               ever reaches this app -- it's not a route this app defines. Only
+               does anything meaningful when accessed through Caddy's Basic Auth;
+               a harmless dead link otherwise (e.g. a local `uvicorn --reload`). -->
+          <a href="/logout" style="color: var(--text-muted); font-size: 0.9rem;" title="Force your browser to re-prompt for Basic Auth credentials">Sign out</a>
+        </span>
+      </nav>
     </div>
+  </header>
+  <div class="page">
+    {% block content %}{% endblock %}
   </div>
-  <nav>
-    <a href="/ui/how-it-works" class="{{ 'active' if request.url.path == '/ui/how-it-works' else '' }}">How It Works</a>
-    <a href="/ui/runs" class="{{ 'active' if request.url.path == '/ui/runs' else '' }}">Pipeline Runs</a>
-    <a href="/ui/simulate" class="{{ 'active' if request.url.path == '/ui/simulate' else '' }}">Simulate Webhook</a>
-    <a href="/ui/config" class="{{ 'active' if request.url.path == '/ui/config' else '' }}">Configuration</a>
-    <!-- request.state.username is set by ui/auth.py::current_username --
-         every /ui/* route depends on it, so it's always present here.
-         Undefined (renders as nothing) only on a page that somehow
-         reached this layout without going through that dependency. This
-         whole group is one flex row (align-items: center on nav handles
-         vertical alignment against the padded tab links to its left) so
-         the label+username and Sign out sit on the same baseline; the
-         auto margin on the group pushes it to the right edge. -->
-    <span style="margin-left: auto; display: flex; align-items: center; gap: 1rem;">
-      {% if request.state.username %}<span style="color: var(--text-muted); font-size: 0.9rem;">User: {{ request.state.username }}</span>{% endif %}
-      <!-- /logout is intercepted by Caddy (see Caddyfile.example) before it
-           ever reaches this app -- it's not a route this app defines. Only
-           does anything meaningful when accessed through Caddy's Basic Auth;
-           a harmless dead link otherwise (e.g. a local `uvicorn --reload`). -->
-      <a href="/logout" style="color: var(--text-muted); font-size: 0.9rem;" title="Force your browser to re-prompt for Basic Auth credentials">Sign out</a>
-    </span>
-  </nav>
-  {% block content %}{% endblock %}
 </body>
 </html>
