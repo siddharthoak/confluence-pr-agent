@@ -18,12 +18,27 @@ why, written so it can be pasted directly into a pull request description.
 """
 
 
-def build_repo_context(repo_targets: list[RepoTarget], repo_dirs: dict[str, Path], workspace: Path) -> str:
+def build_repo_context(
+    repo_targets: list[RepoTarget],
+    repo_dirs: dict[str, Path],
+    workspace: Path,
+    out_of_scope: list[RepoTarget] | None = None,
+) -> str:
     """Describes which repos are checked out as which subdirectories of the
     agent's working directory, for a genuinely multi-repo run -- see
     PageDiff.repo_context. `repo_targets` is the in-scope list (already
     filtered by pipeline/orchestrator.py's label-routing check), each
     entry's cloned path looked up in `repo_dirs`.
+
+    `out_of_scope` -- the rest of this user's configured repos, NOT checked
+    out here because this page didn't carry their routing label -- exists
+    to catch a mistagged BRD: e.g. a page labeled only `repo-api` for a
+    change that (per the spec text) clearly also needs a UI update, with no
+    `repo-ui` label to route it there. The agent can't discover that gap by
+    reading code, since the missing repo was never cloned into its
+    workspace -- it can only compare the spec's own stated requirements
+    against which repos it was actually handed, which is exactly what this
+    section gives it the names/labels to do.
     """
     lines = [
         "This change may span more than one repo, each checked out as a subdirectory "
@@ -38,6 +53,22 @@ def build_repo_context(repo_targets: list[RepoTarget], repo_dirs: dict[str, Path
         "If a change in one repo depends on another (e.g. an interface one repo exposes and "
         "another calls), make sure the edits across them stay consistent with each other."
     )
+    if out_of_scope:
+        lines.append(
+            "\nThe following repos are also part of this platform but are NOT checked out for "
+            "this run (this page wasn't tagged with their routing label), so you cannot see or "
+            "edit their code:"
+        )
+        for rt in out_of_scope:
+            lines.append(f"- {rt.target_repo} (routing label `{rt.label}`)" if rt.label else f"- {rt.target_repo}")
+        lines.append(
+            "\nIf the spec above clearly requires a change in one of those repos too (for "
+            "example, a patient-facing behavior change that needs a UI update, or a new field "
+            "that needs a schema change), do not guess at their contents or invent a change "
+            "there. Implement everything that is genuinely addressable in the repo(s) you do "
+            "have checked out, and end your summary with an explicit note naming which repo(s) "
+            "still need a change and why, so a human can add the right label and re-run."
+        )
     return "\n".join(lines)
 
 

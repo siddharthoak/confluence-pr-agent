@@ -49,7 +49,9 @@
   .test-connection-status { margin-top: 0; }
   .test-connection-status.ok { color: var(--ok, #1a7f37); }
   .test-connection-status.fail { color: var(--danger, #cf222e); }
-  .test-connection-btn.pending { opacity: 0.65; cursor: wait; }
+  .btn-test-connection:disabled { opacity: 0.65; cursor: wait; }
+  .btn-test-connection.pending::before { animation: test-connection-spin 0.8s linear infinite; }
+  @keyframes test-connection-spin { to { transform: rotate(360deg); } }
 </style>
 <h1>Configuration</h1>
 <p class="subtitle">Edits write directly to <code>.env</code> and take effect immediately — no restart needed. Secret fields never show their current value; leave one blank to keep it unchanged.</p>
@@ -76,13 +78,14 @@
     {% endfor %}
   </div>
 
+  {% set engine_key_service = {"ANTHROPIC_API_KEY": "anthropic", "CURSOR_API_KEY": "cursor", "OPENAI_API_KEY": "openai", "GEMINI_API_KEY": "gemini"} %}
   {% for group_name, items in groups.items() %}
   {% set slug = group_name | lower | replace(" ", "-") %}
   <fieldset class="tab-panel" data-tab-panel="{{ slug }}">
     <legend>{{ group_name }}</legend>
     {% for item in items %}
       {% set f = item.field %}
-      {% set is_engine_credential = f.key in ["ANTHROPIC_API_KEY", "CURSOR_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"] %}
+      {% set is_engine_credential = f.key in engine_key_service %}
       {% set is_repo_credential = f.key == "GITHUB_TOKEN" %}
       <div {% if is_engine_credential %}class="engine-fields" data-engine-key="{{ f.key }}"{% elif is_repo_credential %}class="repo-fields" data-repo-key="{{ f.key }}"{% endif %}>
         <label for="{{ f.key }}">
@@ -119,11 +122,27 @@
             autocomplete="off">
         {% endif %}
         {% if f.help_text %}<div class="hint">{{ f.help_text }}</div>{% endif %}
+        {% if is_engine_credential %}
+          <div class="test-connection">
+            <button type="button" class="btn-test-connection test-connection-btn" data-service="{{ engine_key_service[f.key] }}"
+                    data-payload='{"api_key": "{{ f.key }}"}'>
+              Test connection
+            </button>
+            <span class="test-connection-status hint"></span>
+          </div>
+        {% endif %}
       </div>
     {% endfor %}
-    {% if group_name == "Confluence" %}
+    {% if group_name == "Change engine" %}
+      <div class="hint" id="engine-no-key-hint" style="margin-top: 0.4rem;"></div>
+    {% elif group_name == "LLM Judge" %}
       <div class="test-connection">
-        <button type="button" class="btn-secondary test-connection-btn" data-service="confluence"
+        <button type="button" class="btn-test-connection" id="judge-test-connection-btn">Test connection</button>
+        <span class="test-connection-status hint" id="judge-test-connection-status"></span>
+      </div>
+    {% elif group_name == "Confluence" %}
+      <div class="test-connection">
+        <button type="button" class="btn-test-connection test-connection-btn" data-service="confluence"
                 data-payload='{"base_url": "CONFLUENCE_BASE_URL", "email": "CONFLUENCE_USER_EMAIL", "api_token": "CONFLUENCE_API_TOKEN"}'>
           Test connection
         </button>
@@ -131,7 +150,7 @@
       </div>
     {% elif group_name == "Jira" %}
       <div class="test-connection">
-        <button type="button" class="btn-secondary test-connection-btn" data-service="jira"
+        <button type="button" class="btn-test-connection test-connection-btn" data-service="jira"
                 data-payload='{"base_url": "JIRA_BASE_URL", "email": "JIRA_USER_EMAIL", "api_token": "JIRA_API_TOKEN"}'>
           Test connection
         </button>
@@ -139,7 +158,7 @@
       </div>
     {% elif group_name == "Repository" %}
       <div class="test-connection repo-fields" data-repo-key="GITHUB_TOKEN">
-        <button type="button" class="btn-secondary test-connection-btn" data-service="github"
+        <button type="button" class="btn-test-connection test-connection-btn" data-service="github"
                 data-payload='{"token": "GITHUB_TOKEN"}'>
           Test connection
         </button>
@@ -180,6 +199,15 @@
     modelSelect.value = options.includes(previousValue) ? previousValue : "";
   }
 
+  // No dedicated credential field exists on this tab for copilot (reuses
+  // GITHUB_TOKEN, tested from the Repository tab) or antigravity (OAuth-only,
+  // no key at all) -- this hint fills that gap so picking either doesn't
+  // just look like the page forgot to render something.
+  const ENGINE_NO_KEY_HINT = {
+    copilot: "Copilot reuses your GitHub token — test it from the Repository tab.",
+    antigravity: "Antigravity authenticates via its own CLI OAuth login — there's no API key to test here.",
+  };
+
   function syncEngineFields() {
     const select = document.getElementById("CHANGE_AGENT_ENGINE");
     if (!select) return;
@@ -187,6 +215,8 @@
     document.querySelectorAll("[data-engine-key]").forEach((el) => {
       el.classList.toggle("active", el.dataset.engineKey === activeKey);
     });
+    const noKeyHint = document.getElementById("engine-no-key-hint");
+    if (noKeyHint) noKeyHint.textContent = ENGINE_NO_KEY_HINT[select.value] || "";
   }
 
   function syncRepoFields() {
@@ -439,6 +469,37 @@
     });
   }
 
+  // data.ok is a tri-state, not a plain boolean: true/false render green/red
+  // as usual, but a service that has no real way to verify itself from here
+  // (Cursor -- see ui/routes.py's test_connection) returns null, rendered
+  // with neither color so it doesn't read as a pass or a failure.
+  function renderTestConnectionResult(statusEl, data) {
+    statusEl.textContent = data.message || (data.ok ? "Connected." : "Failed.");
+    const cls = data.ok === true ? "ok" : data.ok === false ? "fail" : "";
+    statusEl.className = ("test-connection-status hint " + cls).trim();
+  }
+
+  async function runTestConnection(btn, statusEl, service, payload) {
+    btn.classList.add("pending");
+    btn.disabled = true;
+    statusEl.className = "test-connection-status hint";
+    statusEl.textContent = "Testing…";
+    try {
+      const resp = await fetch(`/ui/test-connection/${service}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      renderTestConnectionResult(statusEl, await resp.json());
+    } catch {
+      statusEl.textContent = "Couldn't reach the server to test this.";
+      statusEl.className = "test-connection-status hint fail";
+    } finally {
+      btn.classList.remove("pending");
+      btn.disabled = false;
+    }
+  }
+
   // Each "Test connection" button's data-payload maps the JSON key the
   // /ui/test-connection/{service} route expects to the id of the field
   // holding it on this page -- read live at click time, not from whatever
@@ -450,33 +511,35 @@
     document.querySelectorAll(".test-connection-btn").forEach((btn) => {
       const statusEl = btn.parentElement.querySelector(".test-connection-status");
       const fieldMap = JSON.parse(btn.dataset.payload || "{}");
-      btn.addEventListener("click", async () => {
+      btn.addEventListener("click", () => {
         const payload = {};
         for (const [payloadKey, fieldId] of Object.entries(fieldMap)) {
           const el = document.getElementById(fieldId);
           payload[payloadKey] = el ? el.value : "";
         }
-        btn.classList.add("pending");
-        btn.disabled = true;
-        statusEl.className = "test-connection-status hint";
-        statusEl.textContent = "Testing…";
-        try {
-          const resp = await fetch(`/ui/test-connection/${btn.dataset.service}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          const data = await resp.json();
-          statusEl.textContent = data.message || (data.ok ? "Connected." : "Failed.");
-          statusEl.className = "test-connection-status hint " + (data.ok ? "ok" : "fail");
-        } catch {
-          statusEl.textContent = "Couldn't reach the server to test this.";
-          statusEl.className = "test-connection-status hint fail";
-        } finally {
-          btn.classList.remove("pending");
-          btn.disabled = false;
-        }
+        runTestConnection(btn, statusEl, btn.dataset.service, payload);
       });
+    });
+  }
+
+  // The LLM Judge tab has no credential fields of its own -- JUDGE_PROVIDER
+  // reuses whichever of ANTHROPIC_API_KEY/OPENAI_API_KEY/GEMINI_API_KEY the
+  // Change Engine tab already holds (see config_fields.py) -- so this
+  // button reads live off JUDGE_PROVIDER's current value to pick both the
+  // service to hit and the field to read, instead of a static data-payload
+  // like the other buttons above.
+  const JUDGE_PROVIDER_KEY_FIELD = { anthropic: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY", gemini: "GEMINI_API_KEY" };
+
+  function initJudgeTestConnection() {
+    const btn = document.getElementById("judge-test-connection-btn");
+    const statusEl = document.getElementById("judge-test-connection-status");
+    const providerSelect = document.getElementById("JUDGE_PROVIDER");
+    if (!btn || !statusEl || !providerSelect) return;
+    btn.addEventListener("click", () => {
+      const service = providerSelect.value;
+      const fieldId = JUDGE_PROVIDER_KEY_FIELD[service];
+      const keyEl = fieldId ? document.getElementById(fieldId) : null;
+      runTestConnection(btn, statusEl, service, { api_key: keyEl ? keyEl.value : "" });
     });
   }
 
@@ -593,6 +656,7 @@
     initRepoLists();
     initEnvFileLoader();
     initTestConnectionButtons();
+    initJudgeTestConnection();
   });
 </script>
 {% endblock %}

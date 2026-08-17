@@ -18,9 +18,12 @@ from dataclasses import replace
 from pathlib import Path
 
 import httpx
+from anthropic import AsyncAnthropic
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
+from google import genai
+from openai import AsyncOpenAI
 
 from confluence_pr_agent.confluence.client import ConfluenceClient
 from confluence_pr_agent.config import clear_settings_cache, get_process_config, get_settings
@@ -312,6 +315,32 @@ def _http_error_message(exc: httpx.HTTPStatusError) -> str:
     return f"Request failed (HTTP {status})."
 
 
+def _sdk_error_message(exc: Exception) -> str:
+    # Anthropic/OpenAI's SDKs raise their own APIStatusError (.status_code);
+    # Gemini's raises google.genai.errors.APIError (.code) -- and, per the
+    # log that prompted this endpoint, Gemini reports an invalid key as a
+    # 400 INVALID_ARGUMENT, not a 401/403, so 400 is grouped in with them
+    # here specifically for that reason, not as a generic "bad request".
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if status in (400, 401, 403):
+        return "Authentication failed — check the API key."
+    if status:
+        return f"Request failed (HTTP {status})."
+    return f"Couldn't reach the provider: {exc}"
+
+
+# Cheapest authenticated call each SDK offers -- listing models costs
+# nothing and needs no prompt, same "cheapest authenticated call" idiom as
+# the Confluence/Jira/GitHub clients' own test_connection() methods.
+async def _test_llm_key(service: str, api_key: str) -> None:
+    if service == "anthropic":
+        await AsyncAnthropic(api_key=api_key).models.list(limit=1)
+    elif service == "openai":
+        await AsyncOpenAI(api_key=api_key).models.list()
+    elif service == "gemini":
+        await genai.Client(api_key=api_key).aio.models.list()
+
+
 @router.post("/ui/test-connection/{service}")
 async def test_connection(service: str, request: Request, username: str = Depends(current_username)):
     """Validates a set of credentials live -- called by each tab's "Test
@@ -370,12 +399,32 @@ async def test_connection(service: str, request: Request, username: str = Depend
                 await client.aclose()
             return {"ok": True, "message": f"Connected as {login}." if login else "Connected."}
 
+        # Shared by the Change Engine tab (claude_code/codex/gemini all use
+        # this same key) and the LLM Judge tab (JUDGE_PROVIDER reuses these
+        # same three keys rather than having its own -- see config_fields.py)
+        # -- one test per credential, not one per role that credential plays.
+        if service in ("anthropic", "openai", "gemini"):
+            settings_key = f"{service}_api_key"
+            api_key = value("api_key", settings_key)
+            if not api_key:
+                return {"ok": False, "message": "API key is required."}
+            await _test_llm_key(service, api_key)
+            return {"ok": True, "message": "Connected."}
+
+        if service == "cursor":
+            return {
+                "ok": None,
+                "message": "Cursor has no directly testable API from here — the CLI validates its own key when it actually runs.",
+            }
+
         return {"ok": False, "message": f"Unknown service: {service}"}
 
     except httpx.HTTPStatusError as exc:
         return {"ok": False, "message": _http_error_message(exc)}
     except httpx.HTTPError as exc:
         return {"ok": False, "message": f"Couldn't reach the server: {exc}"}
+    except Exception as exc:
+        return {"ok": False, "message": _sdk_error_message(exc)}
 
 
 # ---------------------------------------------------------------------------

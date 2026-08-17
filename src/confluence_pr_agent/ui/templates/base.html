@@ -217,6 +217,33 @@
   }
   .btn-secondary:hover { background: rgba(35, 38, 69, 0.05); color: var(--text); }
 
+  /* Deliberately distinct from .btn-secondary (used by "Add repo", "Detect",
+     "Load from .env file" right next to it) -- a credential check reads as
+     an action worth noticing, not one more neutral utility button, so it
+     gets its own color and a bolt icon rather than blending into the row. */
+  .btn-test-connection {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: rgba(52, 104, 192, 0.10);
+    border: 1px solid rgba(52, 104, 192, 0.5);
+    color: var(--accent-blue);
+    padding: 0.45rem 0.9rem 0.45rem 0.7rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    border-radius: 6px;
+  }
+  .btn-test-connection:hover { background: rgba(52, 104, 192, 0.2); color: var(--accent-blue); }
+  .btn-test-connection::before {
+    content: "";
+    width: 13px;
+    height: 13px;
+    flex: none;
+    background-color: currentColor;
+    -webkit-mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><polygon points='13,2 4,14 11,14 9,22 20,10 13,10'/></svg>") no-repeat center / contain;
+    mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><polygon points='13,2 4,14 11,14 9,22 20,10 13,10'/></svg>") no-repeat center / contain;
+  }
+
   .taglist-editor { margin-top: 0.35rem; }
   .taglist-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; min-height: 1.6rem; }
   .taglist-empty { font-size: 0.8rem; color: var(--text-muted); font-style: italic; }
@@ -335,6 +362,14 @@
   .flow-step--failed .flow-node { background: var(--error-bg); border-color: var(--error-border); color: var(--error-text); }
   .flow-step--warning .flow-node { background: var(--warning-bg); border-color: var(--warning-border); color: var(--warning-text); }
   .flow-step--skipped .flow-node { background: var(--neutral-bg); border-color: transparent; color: var(--neutral-text); }
+  /* A not-yet-reached step's .flow-node otherwise falls back to the base
+     rule (background: var(--bg-elevated) -- pure white, same as the card
+     behind it), so on a still-running page the not-yet-reached half of the
+     row reads as visually empty against the colored done/active steps
+     beside it, even though the row itself is perfectly centered. Same
+     neutral tint already used for --skipped and neutral badges, not a new
+     color, just enough presence that pending steps don't disappear. */
+  .flow-step--pending .flow-node { background: var(--neutral-bg); }
   .flow-pulse-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent-blue); }
   .flow-label { margin-top: 0.55rem; font-size: 0.78rem; font-weight: 600; color: var(--text); line-height: 1.3; }
   .flow-step--skipped .flow-label, .flow-step--pending .flow-label { color: var(--text-muted); font-weight: 500; }

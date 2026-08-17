@@ -769,7 +769,9 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
             )
 
         if is_multi_repo:
-            diff.repo_context = build_repo_context(in_scope, repo_dirs, workspace)
+            in_scope_names = {rt.target_repo for rt in in_scope}
+            out_of_scope = [rt for rt in repo_targets if rt.target_repo not in in_scope_names]
+            diff.repo_context = build_repo_context(in_scope, repo_dirs, workspace, out_of_scope)
 
         # Self-correction loop: give the change engine up to N attempts,
         # feeding back the previous attempt's test failures (across every
