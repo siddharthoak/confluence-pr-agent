@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -549,7 +550,12 @@ async def test_judge_rejection_opens_a_flagged_draft_pr_and_still_advances_store
     assert stored["version"] == 2  # advanced -- a PR now exists for this diff
 
     runs = deps.run_store.list_runs()
-    assert runs[0]["current_stage"] == "open_pr"
+    # Reaches (and completes) the send_email stage even though no email
+    # actually gets sent for a judge_rejected repo -- the pipeline still
+    # has to progress through that stage so a *mixed* multi-repo run (some
+    # repos opened cleanly, others judge_rejected) still emails the ones
+    # that qualify. See pipeline/orchestrator.py's email_targets filter.
+    assert runs[0]["current_stage"] == "send_email"
     assert runs[0]["judge_verdict"] == "rejected"
     assert runs[0]["pr_draft"] is True
     assert runs[0]["pr_number"] == 7
@@ -1008,3 +1014,121 @@ async def test_email_send_failure_does_not_erase_the_successful_pr(settings, mon
     stored = deps.store.get("123456")
     assert stored is not None
     assert stored["version"] == 2
+
+
+# --- Multi-repo (TARGET_REPOS_JSON) ------------------------------------
+
+
+def _two_repo_config() -> str:
+    return json.dumps(
+        [
+            {"target_repo": "acme/backend", "base_branch": "main", "test_command": "pytest", "label": "repo:backend"},
+            {"target_repo": "acme/agents", "base_branch": "main", "test_command": "pytest", "label": "repo:agents"},
+        ]
+    )
+
+
+async def test_no_repo_matched_when_page_labels_dont_match_any_configured_repo(settings, monkeypatch):
+    settings.target_repos_json = _two_repo_config()
+    page = _page(2, body="<p>spec v2</p>", labels=["some-other-label"])
+    deps = _make_deps(settings, page=page)
+
+    result = await run_pipeline("123456", deps=deps)
+
+    assert result.status == "no_repo_matched"
+    deps.git.clone.assert_not_called()
+    deps.change_engine.implement_change.assert_not_called()
+
+
+async def test_multi_repo_routes_by_label_only_touches_the_matching_repo(settings, monkeypatch):
+    settings.target_repos_json = _two_repo_config()
+    page = _page(2, body="<p>spec v2</p>", labels=["repo:backend"])
+    deps = _make_deps(settings, page=page)
+
+    async def _fake_run_tests(repo_dir, command):
+        return RepoTestResult(passed=True, output="2 passed", command=command)
+
+    monkeypatch.setattr(orchestrator, "run_tests", _fake_run_tests)
+
+    result = await run_pipeline("123456", deps=deps)
+
+    assert result.status == "opened_pr"
+    assert len(result.repo_results) == 1
+    assert result.repo_results[0].target_repo == "acme/backend"
+    deps.git.clone.assert_awaited_once()
+    assert deps.git.clone.await_args.args[0] == "acme/backend"
+    deps.github.open_pull_request.assert_awaited_once()
+    assert deps.github.open_pull_request.await_args.kwargs["owner_repo"] == "acme/backend"
+
+
+async def test_multi_repo_both_matched_repos_get_their_own_pr(settings, monkeypatch):
+    settings.target_repos_json = _two_repo_config()
+    page = _page(2, body="<p>spec v2</p>", labels=["repo:backend", "repo:agents"])
+    deps = _make_deps(settings, page=page)
+
+    pr_counter = iter([10, 11])
+
+    async def _open_pr_side_effect(owner_repo, head_branch, base_branch, title, body, draft=False):
+        number = next(pr_counter)
+        return PullRequestResult(number=number, url=f"https://github.com/{owner_repo}/pull/{number}", branch=head_branch)
+
+    deps.github.open_pull_request.side_effect = _open_pr_side_effect
+
+    async def _fake_run_tests(repo_dir, command):
+        return RepoTestResult(passed=True, output="2 passed", command=command)
+
+    monkeypatch.setattr(orchestrator, "run_tests", _fake_run_tests)
+
+    result = await run_pipeline("123456", deps=deps)
+
+    assert result.status == "opened_pr"
+    assert deps.git.clone.await_count == 2
+    cloned_repos = {call.args[0] for call in deps.git.clone.await_args_list}
+    assert cloned_repos == {"acme/backend", "acme/agents"}
+
+    statuses = {r.target_repo: r.status for r in result.repo_results}
+    assert statuses == {"acme/backend": "opened_pr", "acme/agents": "opened_pr"}
+
+    stored = deps.store.get("123456")
+    assert stored is not None
+    assert stored["repo_prs"]["acme/backend"]["open_pr_number"] in (10, 11)
+    assert stored["repo_prs"]["acme/agents"]["open_pr_number"] in (10, 11)
+
+
+async def test_multi_repo_one_repo_failing_does_not_block_the_other(settings, monkeypatch):
+    """Partial failure: one repo's PR opens cleanly, the other's GitHub call
+    fails -- the overall run reflects the worst outcome (error), but the
+    successful repo's PR isn't lost, and its reuse info is still persisted.
+    """
+    settings.target_repos_json = _two_repo_config()
+    page = _page(2, body="<p>spec v2</p>", labels=["repo:backend", "repo:agents"])
+    deps = _make_deps(settings, page=page)
+
+    async def _open_pr_side_effect(owner_repo, head_branch, base_branch, title, body, draft=False):
+        if owner_repo == "acme/backend":
+            return PullRequestResult(number=10, url="https://github.com/acme/backend/pull/10", branch=head_branch)
+        raise RuntimeError("GitHub API is down")
+
+    deps.github.open_pull_request.side_effect = _open_pr_side_effect
+
+    async def _fake_run_tests(repo_dir, command):
+        return RepoTestResult(passed=True, output="2 passed", command=command)
+
+    monkeypatch.setattr(orchestrator, "run_tests", _fake_run_tests)
+
+    result = await run_pipeline("123456", deps=deps)
+
+    assert result.status == "error"  # worst-of aggregate across repos
+    statuses = {r.target_repo: r.status for r in result.repo_results}
+    assert statuses == {"acme/backend": "opened_pr", "acme/agents": "error"}
+    failed = next(r for r in result.repo_results if r.target_repo == "acme/agents")
+    assert "GitHub API is down" in failed.error
+    # Backward-compat single-error summary string still mentions the failure.
+    assert "acme/agents" in result.error
+
+    # The successful repo's PR is still tracked for reuse next time, even
+    # though the overall run is reported as an error.
+    stored = deps.store.get("123456")
+    assert stored is not None
+    assert stored["repo_prs"]["acme/backend"]["open_pr_number"] == 10
+    assert "acme/agents" not in stored["repo_prs"]

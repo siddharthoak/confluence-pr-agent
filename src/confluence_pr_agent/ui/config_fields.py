@@ -80,7 +80,7 @@ class ConfigField:
     label: str
     group: str
     secret: bool = False
-    input_type: str = "text"  # text | password | number | select | taglist
+    input_type: str = "text"  # text | password | number | select | taglist | repo_list
     options: list[str] = field(default_factory=list)
     placeholder: str = ""
     help_text: str = ""
@@ -126,9 +126,17 @@ CONFIG_FIELDS: list[ConfigField] = [
         "REPO_PROVIDER", "Repo provider", "Repository", input_type="select", options=REPO_PROVIDERS,
         help_text="Only github is currently implemented -- the others are reserved for future support.",
     ),
-    ConfigField("TARGET_REPO", "Target repo", "Repository", placeholder="owner/name"),
-    ConfigField("TARGET_REPO_BASE_BRANCH", "Base branch", "Repository", placeholder="main"),
-    ConfigField("TARGET_REPO_TEST_COMMAND", "Test command", "Repository", placeholder="pytest"),
+    ConfigField(
+        "TARGET_REPOS_JSON", "Target repos", "Repository", input_type="repo_list",
+        help_text=(
+            "One row per repo this pipeline can touch. Test command can be auto-detected from "
+            "what's actually in the repo (pyproject.toml, package.json, pom.xml, ...), or set by "
+            "hand. Leave Routing label blank on a row to have it match every spec page (the usual "
+            "single-repo setup) -- set it to route that row only to pages carrying that Confluence "
+            "label, so one page can fan a coordinated change out across several repos at once. "
+            "Add more than one row only for that case."
+        ),
+    ),
     ConfigField("GITHUB_TOKEN", "GitHub PAT", "Repository", secret=True),
     # Change engine
     ConfigField(

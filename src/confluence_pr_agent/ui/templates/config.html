@@ -9,6 +9,41 @@
     margin-bottom: 1.5rem;
   }
   .env-loader .hint { flex: 1 1 260px; margin: 0; }
+
+  .repolist-rows { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.35rem; }
+  .repolist-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1.4fr 1fr auto;
+    gap: 0.5rem;
+    align-items: start;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.65rem;
+  }
+  .repolist-row label {
+    margin-top: 0;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .repolist-row input { margin-top: 0.2rem; font-size: 0.85rem; }
+  .repolist-row .repolist-test-command-wrap { display: flex; gap: 0.3rem; align-items: flex-end; }
+  .repolist-row .repolist-test-command-wrap input { flex: 1; }
+  .repolist-detect-btn {
+    margin-top: 0.2rem;
+    padding: 0.55rem 0.6rem;
+    font-size: 0.78rem;
+    white-space: nowrap;
+  }
+  .repolist-remove-btn {
+    align-self: end;
+    margin-top: 0.2rem;
+  }
+  .repolist-remove-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  @media (max-width: 900px) {
+    .repolist-row { grid-template-columns: 1fr 1fr; }
+  }
 </style>
 <h1>Configuration</h1>
 <p class="subtitle">Edits write directly to <code>.env</code> and take effect immediately — no restart needed. Secret fields never show their current value; leave one blank to keep it unchanged.</p>
@@ -62,6 +97,12 @@
               <input type="text" class="taglist-input" placeholder="Add a label, then press Enter">
               <button type="button" class="taglist-add-btn btn-secondary">Add</button>
             </div>
+          </div>
+        {% elif f.input_type == "repo_list" %}
+          <input type="hidden" name="{{ f.key }}" id="{{ f.key }}" value="{{ item.display_value }}">
+          <div class="repolist-editor" data-target="{{ f.key }}">
+            <div class="repolist-rows"></div>
+            <button type="button" class="repolist-add-btn btn-secondary">Add repo</button>
           </div>
         {% else %}
           <input
@@ -226,6 +267,147 @@
     });
   }
 
+  // Repeating repo-config editor, backed by one hidden JSON-array input
+  // (TARGET_REPOS_JSON) -- same "hidden field + rebuild the visible bits on
+  // every change" shape as initTagLists() above, but each "row" is a small
+  // form (repo/branch/test command/label) instead of a plain string.
+  function initRepoLists() {
+    document.querySelectorAll(".repolist-editor").forEach((editor) => {
+      const hiddenInput = document.getElementById(editor.dataset.target);
+      const rowsEl = editor.querySelector(".repolist-rows");
+      const addBtn = editor.querySelector(".repolist-add-btn");
+
+      function getRows() {
+        try {
+          const parsed = JSON.parse(hiddenInput.value || "[]");
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      }
+
+      function setRows(rows) {
+        hiddenInput.value = JSON.stringify(rows);
+        render();
+      }
+
+      function updateRow(index, patch) {
+        const rows = getRows();
+        rows[index] = { ...rows[index], ...patch };
+        setRows(rows);
+      }
+
+      async function detectTestCommand(index, repoValue, statusEl) {
+        if (!repoValue.trim()) return;
+        statusEl.textContent = "Detecting…";
+        try {
+          const resp = await fetch("/ui/repos/detect-test-command?repo=" + encodeURIComponent(repoValue.trim()));
+          const data = await resp.json();
+          if (data.test_command) {
+            updateRow(index, { test_command: data.test_command });
+            statusEl.textContent = "Detected from the repo.";
+          } else {
+            statusEl.textContent = "Couldn't detect one — set it by hand.";
+          }
+        } catch {
+          statusEl.textContent = "Couldn't reach GitHub to detect one.";
+        }
+      }
+
+      function render() {
+        const rows = getRows();
+        rowsEl.innerHTML = "";
+        rows.forEach((row, index) => {
+          const rowEl = document.createElement("div");
+          rowEl.className = "repolist-row";
+
+          const repoField = document.createElement("div");
+          repoField.innerHTML = '<label>Repo</label>';
+          const repoInput = document.createElement("input");
+          repoInput.type = "text";
+          repoInput.placeholder = "owner/name";
+          repoInput.value = row.target_repo || "";
+          repoInput.addEventListener("change", () => updateRow(index, { target_repo: repoInput.value.trim() }));
+          repoInput.addEventListener("blur", () => {
+            if (!row.test_command && repoInput.value.trim()) {
+              detectTestCommand(index, repoInput.value, statusEl);
+            }
+          });
+          repoField.appendChild(repoInput);
+
+          const branchField = document.createElement("div");
+          branchField.innerHTML = '<label>Base branch</label>';
+          const branchInput = document.createElement("input");
+          branchInput.type = "text";
+          branchInput.placeholder = "main";
+          branchInput.value = row.base_branch || "";
+          branchInput.addEventListener("change", () => updateRow(index, { base_branch: branchInput.value.trim() }));
+          branchField.appendChild(branchInput);
+
+          const testField = document.createElement("div");
+          testField.innerHTML = '<label>Test command</label>';
+          const testWrap = document.createElement("div");
+          testWrap.className = "repolist-test-command-wrap";
+          const testInput = document.createElement("input");
+          testInput.type = "text";
+          testInput.placeholder = "pytest";
+          testInput.value = row.test_command || "";
+          testInput.addEventListener("change", () => updateRow(index, { test_command: testInput.value.trim() }));
+          const detectBtn = document.createElement("button");
+          detectBtn.type = "button";
+          detectBtn.className = "btn-secondary repolist-detect-btn";
+          detectBtn.textContent = "Detect";
+          detectBtn.title = "Look at this repo's root files and suggest a test command";
+          detectBtn.addEventListener("click", () => detectTestCommand(index, repoInput.value, statusEl));
+          testWrap.appendChild(testInput);
+          testWrap.appendChild(detectBtn);
+          testField.appendChild(testWrap);
+          const statusEl = document.createElement("div");
+          statusEl.className = "hint";
+          statusEl.style.margin = "0.3rem 0 0";
+          testField.appendChild(statusEl);
+
+          const labelField = document.createElement("div");
+          labelField.innerHTML = '<label>Routing label</label>';
+          const labelInput = document.createElement("input");
+          labelInput.type = "text";
+          labelInput.placeholder = "(blank = every page)";
+          labelInput.value = row.label || "";
+          labelInput.addEventListener("change", () => updateRow(index, { label: labelInput.value.trim() }));
+          labelField.appendChild(labelInput);
+
+          const removeBtn = document.createElement("button");
+          removeBtn.type = "button";
+          removeBtn.className = "btn-danger repolist-remove-btn";
+          removeBtn.textContent = "Remove";
+          removeBtn.disabled = rows.length <= 1;
+          removeBtn.title = rows.length <= 1 ? "At least one repo is required" : "Remove this repo";
+          removeBtn.addEventListener("click", () => {
+            if (rows.length <= 1) return;
+            setRows(rows.filter((_, i) => i !== index));
+          });
+
+          rowEl.appendChild(repoField);
+          rowEl.appendChild(branchField);
+          rowEl.appendChild(testField);
+          rowEl.appendChild(labelField);
+          rowEl.appendChild(removeBtn);
+          rowsEl.appendChild(rowEl);
+        });
+      }
+
+      addBtn.addEventListener("click", () => {
+        setRows([...getRows(), { target_repo: "", base_branch: "main", test_command: "", label: "" }]);
+      });
+
+      // Same hook the "Load from .env file" picker uses for the taglist
+      // editor -- setting .value alone never fires anything on its own.
+      hiddenInput.addEventListener("change", render);
+
+      render();
+    });
+  }
+
   // Populates every field on this page from a local .env-style file in one
   // go, entirely client-side (no upload, nothing hits the server until
   // Save) -- same pattern as the config picker in
@@ -336,6 +518,7 @@
     const judgeProviderSelect = document.getElementById("JUDGE_PROVIDER");
     if (judgeProviderSelect) judgeProviderSelect.addEventListener("change", syncJudgeModelOptions);
     initTagLists();
+    initRepoLists();
     initEnvFileLoader();
   });
 </script>

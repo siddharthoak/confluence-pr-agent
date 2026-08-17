@@ -26,6 +26,14 @@ class StoredPage(TypedDict):
     # API, not assumed from this cache alone). See pipeline/orchestrator.py.
     open_pr_number: NotRequired[int | None]
     open_pr_branch: NotRequired[str | None]
+    # Same idea as open_pr_number/open_pr_branch above, but keyed per repo
+    # (target_repo -> {"open_pr_number": int, "open_pr_branch": str}) for a
+    # multi-repo run (see config.py::Settings.resolved_repo_targets and
+    # pipeline/orchestrator.py) -- one page can now have an open PR in
+    # several repos at once. open_pr_number/open_pr_branch above stay as the
+    # single-repo fallback's own record (read first for any page that
+    # predates this field, or that's never been anything but single-repo).
+    repo_prs: NotRequired[dict[str, dict]]
     # Same idea, for the Jira story tracking this page (JIRA_ENABLED) -- the
     # next run comments on it instead of creating a duplicate while it's
     # still open. See pipeline/orchestrator.py.

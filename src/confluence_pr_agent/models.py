@@ -27,6 +27,15 @@ class PageDiff:
     is_first_seen: bool
     body_checksum: str  # sha256 of page's normalized plain-text body -- see confluence/diff.py
     content_unchanged: bool = False  # version bumped (e.g. metadata edit) but checksum matched
+    # Set by pipeline/orchestrator.py only for a genuinely multi-repo run --
+    # a short description of which repos are checked out as which
+    # subdirectories of the agent's working directory, so a coupled change
+    # can be made coherently across them. None for the (default, unchanged)
+    # single-repo case. See agent/prompts.py::build_repo_context/
+    # build_user_prompt -- kept on PageDiff rather than a new parameter on
+    # ChangeEngine.implement_change so every engine implementation (already
+    # taking `diff` unchanged) needs no signature change at all.
+    repo_context: str | None = None
 
 
 @dataclass
@@ -83,6 +92,43 @@ class JudgeResult:
     reasoning: str
     concerns: list[str] = field(default_factory=list)
     criteria: list[JudgeCriterion] = field(default_factory=list)
+
+
+@dataclass
+class RepoTarget:
+    """One repo a spec change can be routed to. Settings.resolved_repo_targets
+    (config.py) returns a list of these -- either parsed from
+    TARGET_REPOS_JSON (real multi-repo config) or a single synthetic entry
+    built from the legacy TARGET_REPO/TARGET_REPO_BASE_BRANCH/
+    TARGET_REPO_TEST_COMMAND fields, with an empty label. Empty label means
+    "matches every page" -- same semantics CONFLUENCE_ALLOWED_LABELS already
+    uses for "no filter configured" -- so a page is in scope for this repo
+    whenever the label is blank or the page actually carries it.
+    """
+
+    target_repo: str  # owner/name
+    base_branch: str
+    test_command: str
+    label: str = ""
+
+
+@dataclass
+class RepoChangeResult:
+    """One repo's outcome within a pipeline run. A run with N in-scope repos
+    (see pipeline/orchestrator.py) produces N of these -- PipelineResult.
+    repo_results / RunRecord.repo_results below.
+    """
+
+    target_repo: str
+    # "opened_pr" | "no_changes" (agent didn't touch this repo) |
+    # "tests_failed" | "judge_rejected" | "error"
+    status: str
+    files_changed: list[str] = field(default_factory=list)
+    pull_request: "PullRequestResult | None" = None
+    reused_pr: bool = False
+    judge: "JudgeResult | None" = None
+    tests: "RepoTestResult | None" = None
+    error: str | None = None
 
 
 @dataclass
@@ -159,6 +205,13 @@ class PipelineResult:
     email_sent: bool = False
     email_error: str | None = None
     attempts: int = 1  # how many ai_agent/run_tests cycles this run took -- see change_agent_max_attempts
+    # Per-repo detail for a (possibly multi-repo) run -- see RepoTarget's
+    # docstring. `pull_request`/`reused_pr` above stay populated from the
+    # first repo in this list that has one, for the single-repo UI
+    # (runs.html/run_detail.html), which doesn't render this list yet --
+    # see the plan's UI follow-up. Always exactly one entry for a
+    # single-repo (today's default/fallback) run.
+    repo_results: list[RepoChangeResult] = field(default_factory=list)
 
 
 @dataclass
@@ -202,3 +255,9 @@ class RunRecord:
     jira_issue_key: str | None = None
     jira_issue_url: str | None = None
     jira_reused: bool = False  # true if an existing still-open story was commented on rather than a new one created
+    # Per-repo detail -- see PipelineResult.repo_results above for why
+    # target_repo/pr_number/pr_url/pr_draft/reused_pr above stay populated
+    # too (first repo with a PR, for today's single-repo UI). Old run
+    # records predating this field simply won't have the key -- Jinja's
+    # Undefined handles that as empty, not an error.
+    repo_results: list[RepoChangeResult] = field(default_factory=list)

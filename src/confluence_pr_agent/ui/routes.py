@@ -25,6 +25,8 @@ from fastapi.templating import Jinja2Templates
 from confluence_pr_agent.config import clear_settings_cache, get_process_config, get_settings
 from confluence_pr_agent.pipeline.poller import poll_once
 from confluence_pr_agent.pipeline.stages import STAGE_LABELS
+from confluence_pr_agent.repo.github_client import GitHubClient
+from confluence_pr_agent.repo.test_command_detection import detect_test_command
 from confluence_pr_agent.storage.run_store import RunStore
 from confluence_pr_agent.ui.auth import current_username
 from confluence_pr_agent.ui.config_fields import (
@@ -47,6 +49,7 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 # limited to outcomes that happen to have occurred yet.
 ALL_STATUSES = [
     "running", "opened_pr", "tests_failed", "judge_rejected", "error", "no_change_detected", "ignored",
+    "no_repo_matched",
 ]
 
 STATUS_LABELS = {
@@ -57,6 +60,15 @@ STATUS_LABELS = {
     "error": "Error",
     "no_change_detected": "No Change",
     "ignored": "Ignored (label)",
+    # A configured repo list, but none of their routing labels matched this
+    # page -- see pipeline/orchestrator.py's scope-resolution step. Distinct
+    # from "ignored" (that one's the poll-level CONFLUENCE_ALLOWED_LABELS
+    # gate, a page never even considered) and from "no_changes" below (a
+    # per-repo outcome, not a whole-run one).
+    "no_repo_matched": "No Repo Matched",
+    # Per-repo only (RepoChangeResult.status, not RunRecord.status) -- a
+    # repo that was in scope but the agent decided didn't need editing.
+    "no_changes": "No Changes",
 }
 
 
@@ -168,6 +180,26 @@ def _current_env_values(username: str) -> dict[str, str]:
 
 def _config_context(username: str, saved: bool = False, error: str | None = None) -> dict:
     values = _current_env_values(username)
+    # Always seeded from resolved_repo_targets (config.py), not the raw
+    # TARGET_REPOS_JSON env value directly -- for a legacy single-repo user
+    # who's never touched this field, that property already builds the
+    # right one-row fallback from TARGET_REPO/TARGET_REPO_BASE_BRANCH/
+    # TARGET_REPO_TEST_COMMAND, so the new repeating-row editor shows their
+    # actual current config instead of an empty, "your config vanished"
+    # list. Hitting Save with no changes writes that same row back as real
+    # TARGET_REPOS_JSON -- a one-time, transparent migration onto the new
+    # representation, not a behavior change.
+    values["TARGET_REPOS_JSON"] = json.dumps(
+        [
+            {
+                "target_repo": rt.target_repo,
+                "base_branch": rt.base_branch,
+                "test_command": rt.test_command,
+                "label": rt.label,
+            }
+            for rt in get_settings(username).resolved_repo_targets
+        ]
+    )
     current_judge_provider = values.get("JUDGE_PROVIDER", "").lower()
     groups: dict[str, list[dict]] = {}
     for f in CONFIG_FIELDS:
@@ -242,6 +274,31 @@ async def save_config(request: Request, username: str = Depends(current_username
 
     clear_settings_cache()
     return RedirectResponse(url="/ui/config?saved=1", status_code=303)
+
+
+@router.get("/ui/repos/detect-test-command")
+async def detect_test_command_route(repo: str, username: str = Depends(current_username)):
+    """Called by the repeating repo-config editor's JS when a row's repo
+    field is filled in -- looks at that repo's actual root files (via this
+    user's own GitHub token) and suggests a test command instead of leaving
+    it blank or wrong. Best-effort: any failure (bad repo name, no access,
+    network) degrades to {"test_command": None}, same fail-open idiom as
+    everything else here -- this is a convenience, not something that
+    should be able to break the config page.
+    """
+    settings = get_settings(username)
+    repo = repo.strip()
+    if not repo or not settings.github_token:
+        return {"test_command": None}
+
+    github = GitHubClient(settings.github_token)
+    try:
+        files = await github.list_root_files(repo)
+        return {"test_command": detect_test_command(files)}
+    except Exception:
+        return {"test_command": None}
+    finally:
+        await github.aclose()
 
 
 # ---------------------------------------------------------------------------

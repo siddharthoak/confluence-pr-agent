@@ -91,3 +91,16 @@ class GitHubClient:
         if resp.status_code == 404:
             return  # wasn't on the PR (or repo) -- already the desired state
         resp.raise_for_status()
+
+    async def list_root_files(self, owner_repo: str) -> list[str]:
+        """Names of every file/dir at the repo's root, on its default
+        branch -- used by ui/routes.py's test-command auto-detect endpoint
+        to spot a marker file (pyproject.toml, package.json, pom.xml, ...)
+        without a full clone. Raises on a nonexistent/inaccessible repo,
+        same as everything else in this client -- the caller decides how to
+        degrade (see repo/test_command_detection.py's usage).
+        """
+        resp = await self._client.get(f"/repos/{owner_repo}/contents/")
+        resp.raise_for_status()
+        data = resp.json()
+        return [item["name"] for item in data] if isinstance(data, list) else []

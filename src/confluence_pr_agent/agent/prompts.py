@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from confluence_pr_agent.models import PageDiff
+from pathlib import Path
+
+from confluence_pr_agent.models import PageDiff, RepoTarget
 
 SYSTEM_PROMPT = """You are a senior software engineer implementing a change to a codebase based \
 on an updated feature specification from Confluence. Rules:
@@ -16,12 +18,37 @@ why, written so it can be pasted directly into a pull request description.
 """
 
 
+def build_repo_context(repo_targets: list[RepoTarget], repo_dirs: dict[str, Path], workspace: Path) -> str:
+    """Describes which repos are checked out as which subdirectories of the
+    agent's working directory, for a genuinely multi-repo run -- see
+    PageDiff.repo_context. `repo_targets` is the in-scope list (already
+    filtered by pipeline/orchestrator.py's label-routing check), each
+    entry's cloned path looked up in `repo_dirs`.
+    """
+    lines = [
+        "This change may span more than one repo, each checked out as a subdirectory "
+        "of your working directory:",
+        "",
+    ]
+    for rt in repo_targets:
+        rel = repo_dirs[rt.target_repo].relative_to(workspace)
+        lines.append(f"- `{rel}/` -- {rt.target_repo}")
+    lines.append(
+        "\nOnly edit the repos actually relevant to this change -- leave the others untouched. "
+        "If a change in one repo depends on another (e.g. an interface one repo exposes and "
+        "another calls), make sure the edits across them stay consistent with each other."
+    )
+    return "\n".join(lines)
+
+
 def build_user_prompt(diff: PageDiff, retry_context: str | None = None) -> str:
     header = (
         f"Confluence spec page: {diff.page.title}\n"
         f"Page URL: {diff.page.url}\n"
         f"Page version: {diff.previous_version} -> {diff.page.version}\n\n"
     )
+    if diff.repo_context:
+        header += diff.repo_context + "\n\n"
     if diff.is_first_seen:
         body = (
             "This is the first time this page has been processed. Implement the feature "

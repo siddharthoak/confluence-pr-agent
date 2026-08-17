@@ -25,11 +25,17 @@ it permanently for every caller, not just tests.
 
 from __future__ import annotations
 
+import json
+import logging
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+
+from confluence_pr_agent.models import RepoTarget
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_USER_FALLBACK = "default"  # used when DEFAULT_USER is unset, so the webhook path never hard-fails
 
@@ -139,6 +145,16 @@ class Settings(BaseSettings):
     target_repo: str = Field(default="your-org/your-repo")
     target_repo_base_branch: str = Field(default="main")
     target_repo_test_command: str = Field(default="pytest")
+    # Real multi-repo config -- a JSON array of {target_repo, base_branch,
+    # test_command, label} objects, e.g. for a change that needs coordinated
+    # edits across several coupled repos (see pipeline/orchestrator.py's
+    # scope-resolution step). Blank (the default) means "not configured" --
+    # resolved_repo_targets below then falls back to the single TARGET_REPO/
+    # TARGET_REPO_BASE_BRANCH/TARGET_REPO_TEST_COMMAND fields above, so an
+    # existing single-repo user's .env needs no changes at all to keep
+    # working exactly as before. No UI for editing this yet (still a raw
+    # JSON blob) -- see the plan's repeating-repo-config-editor follow-up.
+    target_repos_json: str = Field(default="")
 
     # Change engine (code-writing backend) -- one of:
     # claude_code | cursor | copilot | codex | gemini | antigravity
@@ -219,6 +235,53 @@ class Settings(BaseSettings):
     @property
     def confluence_allowed_labels_list(self) -> list[str]:
         return [label.strip().lower() for label in self.confluence_allowed_labels.split(",") if label.strip()]
+
+    @property
+    def resolved_repo_targets(self) -> list[RepoTarget]:
+        """The repo(s) a spec change can be routed to -- always at least
+        one entry (never empty), so callers never need a separate
+        single-repo-vs-multi-repo branch of their own.
+
+        Real multi-repo config (TARGET_REPOS_JSON) wins if it's set and
+        parses to at least one entry. A malformed value fails open to the
+        single-repo fallback rather than raising -- a typo in a raw JSON
+        field regressing to "not configured" is far better than every
+        pipeline run for this user crashing outright. Logged either way so
+        a silent typo doesn't stay invisible forever.
+        """
+        raw = self.target_repos_json.strip()
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if not isinstance(parsed, list):
+                    raise ValueError("TARGET_REPOS_JSON must be a JSON array")
+                targets = [
+                    RepoTarget(
+                        target_repo=str(entry["target_repo"]),
+                        base_branch=str(entry.get("base_branch") or "main"),
+                        test_command=str(entry.get("test_command") or "pytest"),
+                        label=str(entry.get("label") or "").strip(),
+                    )
+                    for entry in parsed
+                ]
+                if targets:
+                    return targets
+                logger.warning("TARGET_REPOS_JSON is an empty list; falling back to TARGET_REPO.")
+            except Exception as exc:
+                logger.warning("Could not parse TARGET_REPOS_JSON (%s); falling back to TARGET_REPO.", exc)
+
+        # Fallback: today's single-repo fields, as one synthetic entry with
+        # no label -- an empty label matches every page (see RepoTarget's
+        # docstring), so this behaves exactly like the pre-multi-repo
+        # pipeline for every existing user's unmodified .env.
+        return [
+            RepoTarget(
+                target_repo=self.target_repo,
+                base_branch=self.target_repo_base_branch,
+                test_command=self.target_repo_test_command,
+                label="",
+            )
+        ]
 
     @property
     def data_dir_path(self) -> Path:

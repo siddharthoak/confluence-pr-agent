@@ -38,8 +38,12 @@ def _as(username: str) -> dict[str, str]:
 
 
 def test_config_saved_by_one_user_is_invisible_to_another(client):
-    client.post("/ui/config", data={"TARGET_REPO": "alice/repo-a"}, headers=_as("alice"))
-    client.post("/ui/config", data={"TARGET_REPO": "bob/repo-b"}, headers=_as("bob"))
+    client.post(
+        "/ui/config", data={"TARGET_REPOS_JSON": '[{"target_repo": "alice/repo-a"}]'}, headers=_as("alice")
+    )
+    client.post(
+        "/ui/config", data={"TARGET_REPOS_JSON": '[{"target_repo": "bob/repo-b"}]'}, headers=_as("bob")
+    )
 
     alice_page = client.get("/ui/config", headers=_as("alice")).text
     bob_page = client.get("/ui/config", headers=_as("bob")).text

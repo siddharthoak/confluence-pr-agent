@@ -35,9 +35,11 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 from confluence_pr_agent.agent.base import ChangeEngine
 from confluence_pr_agent.agent.factory import build_change_engine
+from confluence_pr_agent.agent.prompts import build_repo_context
 from confluence_pr_agent.config import Settings, get_process_config, get_settings
 from confluence_pr_agent.confluence.client import ConfluenceClient
 from confluence_pr_agent.confluence.diff import compute_diff
@@ -52,6 +54,9 @@ from confluence_pr_agent.models import (
     PageDiff,
     PageSnapshot,
     PipelineResult,
+    RepoChangeResult,
+    RepoTarget,
+    RepoTestResult,
     RunRecord,
 )
 from confluence_pr_agent.notifications.base import EmailClient
@@ -146,6 +151,56 @@ def _build_pr_body(
     return "\n".join(parts)
 
 
+def _repo_slug(target_repo: str) -> str:
+    """owner/name -> a filesystem-safe subdirectory name, for the multi-repo
+    workspace layout (single-repo runs never nest, so never call this).
+    """
+    return target_repo.replace("/", "_")
+
+
+def _repo_pr_info(previous_page: dict | None, target_repo: str) -> tuple[int | None, str | None]:
+    """(open_pr_number, open_pr_branch) for `target_repo` from the stored
+    page record, if any -- checks the per-repo `repo_prs` map first (see
+    storage/page_store.py::StoredPage), falling back to the legacy singular
+    open_pr_number/open_pr_branch fields when there's no repo_prs map at all
+    yet (a record from before multi-repo support, or one that's only ever
+    been single-repo). A record that DOES have a repo_prs map but nothing
+    for this specific repo genuinely has no open PR there -- doesn't fall
+    back to the legacy fields in that case, which would misattribute an
+    unrelated repo's stale PR.
+    """
+    if not previous_page:
+        return None, None
+    repo_prs = previous_page.get("repo_prs") or {}
+    entry = repo_prs.get(target_repo)
+    if entry:
+        return entry.get("open_pr_number"), entry.get("open_pr_branch")
+    if not repo_prs:
+        return previous_page.get("open_pr_number"), previous_page.get("open_pr_branch")
+    return None, None
+
+
+# Aggregate status for a multi-repo run's overall RunRecord.status: the
+# worst outcome across all repo_results wins, so a partial failure never
+# reads identically to full success in /ui/runs. Repos that simply had
+# nothing to do ("no_changes") don't count as a failure on their own.
+_STATUS_SEVERITY = {"error": 4, "tests_failed": 3, "judge_rejected": 2, "opened_pr": 1, "no_changes": 0}
+
+
+def _aggregate_status(repo_results: list[RepoChangeResult]) -> str:
+    if not repo_results:
+        return "error"
+    worst = max(repo_results, key=lambda r: _STATUS_SEVERITY.get(r.status, 0))
+    if worst.status == "no_changes" and len(repo_results) > 1:
+        # Every in-scope repo had nothing to do -- distinct from a single-
+        # repo "agent made no file changes" error (still an error there,
+        # since there's nowhere else the change could have landed); in
+        # multi-repo it's a legitimate (if unusual) outcome; surfaced as
+        # its own status rather than silently looking like "opened_pr".
+        return "no_changes"
+    return worst.status
+
+
 @dataclass
 class PipelineDeps:
     """Injected collaborators -- lets tests substitute fakes for each stage."""
@@ -209,6 +264,159 @@ def build_deps(settings: Settings | None = None) -> PipelineDeps:
     )
 
 
+async def _setup_repo_branch(
+    deps: PipelineDeps,
+    rt: RepoTarget,
+    repo_dir: Path,
+    page_id: str,
+    page: PageSnapshot,
+    previous_page: dict | None,
+) -> tuple[str, int | None, bool]:
+    """Clones `rt` and checks out either a still-open PR's branch (reuse) or
+    a fresh one -- everything that must happen before the shared change-
+    engine call edits the workspace. Returns (branch_name, reuse_pr_number,
+    reused). Mirrors the single-repo version of this logic exactly, just
+    parametrized per repo instead of off settings.target_repo directly.
+    """
+    await deps.git.clone(rt.target_repo, repo_dir, rt.base_branch)
+
+    reuse_pr_number, reuse_branch = _repo_pr_info(previous_page, rt.target_repo)
+    if reuse_branch:
+        try:
+            pr_status = await deps.github.get_pull_request(rt.target_repo, reuse_pr_number)
+            if not pr_status.is_open:
+                reuse_pr_number, reuse_branch = None, None
+        except Exception as exc:
+            logger.warning(
+                "Could not check status of previously-opened PR #%s for %s on page %s; opening a new PR instead: %s",
+                reuse_pr_number, rt.target_repo, page_id, exc,
+            )
+            reuse_pr_number, reuse_branch = None, None
+
+    if reuse_branch:
+        try:
+            await deps.git.checkout_existing_branch(repo_dir, reuse_branch)
+            logger.info(
+                "PR #%s for %s on page %s is still open; reusing its branch instead of opening a new PR.",
+                reuse_pr_number, rt.target_repo, page_id,
+            )
+            return reuse_branch, reuse_pr_number, True
+        except Exception as exc:
+            logger.warning(
+                "Could not check out existing PR branch %s for %s on page %s; opening a new PR instead: %s",
+                reuse_branch, rt.target_repo, page_id, exc,
+            )
+
+    branch_name = f"confluence-sync/page-{page_id}-v{page.version}-{int(time.time())}"
+    await deps.git.create_branch(repo_dir, branch_name)
+    return branch_name, None, False
+
+
+async def _finalize_repo(
+    deps: PipelineDeps,
+    rt: RepoTarget,
+    repo_dir: Path,
+    branch_name: str,
+    reuse_pr_number: int | None,
+    reused: bool,
+    page: PageSnapshot,
+    diff: PageDiff,
+    change: ChangeAgentResult,
+    judge_enabled: bool,
+) -> RepoChangeResult:
+    """Commits/pushes/opens-or-updates a PR for one in-scope, actually-
+    touched repo, once the shared agent call + test retry loop
+    (run_pipeline) has already succeeded across the whole workspace.
+    Independent per repo on purpose: a failure here (PR API error, judge
+    call failing) only affects this repo's own RepoChangeResult and never
+    aborts the others -- see _aggregate_status for how a partial failure is
+    reflected in the overall run's status.
+    """
+    files_changed = await deps.git.changed_files(repo_dir)
+
+    judge_result: JudgeResult | None = None
+    if judge_enabled:
+        if not judge_configured(deps.settings):
+            judge_result = JudgeResult(
+                verdict="skipped",
+                reasoning=(
+                    f"No API key configured for judge provider '{deps.settings.judge_provider}'; "
+                    "skipping LLM review."
+                ),
+            )
+        else:
+            try:
+                code_diff = await deps.git.diff(repo_dir)
+                judge_result = await deps.judge.evaluate(diff, change, code_diff)
+            except Exception as exc:
+                logger.warning(
+                    "LLM judge failed for %s; proceeding without review: %s", rt.target_repo, exc
+                )
+                judge_result = JudgeResult(
+                    verdict="skipped", reasoning=f"Judge call failed; proceeding without review: {exc}"
+                )
+        if judge_result.verdict == "rejected":
+            logger.warning(
+                "LLM judge rejected the change to %s: %s -- opening a flagged draft PR anyway.",
+                rt.target_repo, judge_result.reasoning,
+            )
+
+    is_rejected = judge_result is not None and judge_result.verdict == "rejected"
+
+    try:
+        commit_message = f"Sync with Confluence spec: {page.title} (v{page.version})\n\n{change.summary}"
+        await deps.git.commit_all(repo_dir, commit_message)
+
+        pr_title = f"Sync with Confluence: {page.title} (v{page.version})"
+        if is_rejected:
+            pr_title = f"[Needs Work] {pr_title}"
+        pr_body = _build_pr_body(page, diff, change, judge_result)
+        verdict_for_labels = judge_result.verdict if judge_result else "approved"
+
+        await deps.git.push(repo_dir, branch_name)
+        if reused:
+            pr_body = (
+                f"_Updated automatically: the spec changed again (v{diff.previous_version} -> "
+                f"v{page.version}) while this PR was still open, so it was updated in place "
+                "instead of opening a new one._\n\n"
+            ) + pr_body
+            pull_request = await deps.github.update_pull_request(
+                owner_repo=rt.target_repo, pr_number=reuse_pr_number, title=pr_title, body=pr_body,
+            )
+        else:
+            pull_request = await deps.github.open_pull_request(
+                owner_repo=rt.target_repo,
+                head_branch=branch_name,
+                base_branch=rt.base_branch,
+                title=pr_title,
+                body=pr_body,
+                draft=is_rejected,
+            )
+
+        await _sync_verdict_label(deps.github, rt.target_repo, pull_request.number, verdict_for_labels)
+
+        return RepoChangeResult(
+            target_repo=rt.target_repo,
+            status="judge_rejected" if is_rejected else "opened_pr",
+            files_changed=files_changed,
+            pull_request=pull_request,
+            reused_pr=reused,
+            judge=judge_result,
+        )
+    except Exception as exc:
+        # Unlike the reuse lookup in _setup_repo_branch, this can't fall
+        # back to "just open a new PR instead" once reused -- the agent's
+        # new commits may already be sitting on the existing branch.
+        # Surfaced as this repo's own error rather than aborting the whole
+        # run -- see _aggregate_status.
+        logger.exception("Failed to open/update a PR for %s on page %s", rt.target_repo, page.page_id)
+        error = f"failed to update existing PR #{reuse_pr_number}: {exc}" if reused else f"failed to open a PR: {exc}"
+        return RepoChangeResult(
+            target_repo=rt.target_repo, status="error", files_changed=files_changed,
+            judge=judge_result, error=error,
+        )
+
+
 async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> PipelineResult:
     owns_deps = deps is None
     deps = deps or build_deps()
@@ -217,6 +425,15 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
     run_id = uuid.uuid4().hex[:12]
     started_at = datetime.now(timezone.utc)
     start_clock = time.monotonic()
+
+    # A display string for RunRecord.target_repo (still a single field, kept
+    # for today's single-repo-shaped UI -- see models.py::RunRecord's
+    # repo_results docstring). Computed once, from every *configured* repo
+    # regardless of which ones actually end up in scope for this page, so
+    # the "running" placeholder below has something sensible to show before
+    # scope is even resolved; finish() overrides it with the real in-scope
+    # set once known.
+    all_configured_repos = ", ".join(rt.target_repo for rt in settings.resolved_repo_targets)
 
     # Declared here (not first assigned deep inside the try block) so
     # they're always safely referenceable in finish() and the outermost
@@ -252,7 +469,7 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                 page_title=page.title if page else "",
                 confluence_url=page.url if page else "",
                 engine=settings.change_agent_engine,
-                target_repo=settings.target_repo,
+                target_repo=all_configured_repos,
                 status="running",
                 current_stage=stage,
                 max_attempts=max(1, settings.change_agent_max_attempts),
@@ -267,30 +484,32 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
         successful (or already-failed) run into something worse. Comments
         on the tracked issue with either why the run failed (so a developer
         can pick it up manually, per the "create the story regardless"
-        design) or the PR that resulted.
+        design) or every PR that resulted -- one story covers the whole
+        (possibly multi-repo) change, so its comment lists all of them, not
+        just one.
         """
         if not result.jira_issue:
             return
         try:
-            if result.status in ("opened_pr", "judge_rejected") and result.pull_request:
-                if result.status == "judge_rejected":
-                    message = (
-                        f"Pull request opened as a draft, flagged for review: {result.pull_request.url}\n\n"
-                        "The LLM judge found at least one criterion clearly unmet -- see the PR "
-                        "description for specifics."
-                    )
-                elif result.judge and result.judge.verdict == "approved_with_warnings":
-                    message = (
-                        f"Pull request opened: {result.pull_request.url}\n\n"
-                        "(The LLM judge flagged non-blocking concerns -- worth a look before merging.)"
-                    )
-                else:
-                    message = f"Pull request opened: {result.pull_request.url}"
-                await deps.jira.add_comment(result.jira_issue.key, message)
-            elif result.status in ("tests_failed", "error"):
-                reason = result.error or (
-                    result.tests.output[-2000:] if result.tests and result.tests.output else "See the run details."
-                )
+            opened = [r for r in result.repo_results if r.pull_request]
+            if opened:
+                lines = []
+                for r in opened:
+                    line = f"Pull request opened for `{r.target_repo}`: {r.pull_request.url}"
+                    if r.status == "judge_rejected":
+                        line += " (opened as a draft -- the LLM judge found at least one criterion clearly unmet)"
+                    elif r.judge and r.judge.verdict == "approved_with_warnings":
+                        line += " (LLM judge flagged non-blocking concerns -- worth a look before merging)"
+                    lines.append(line)
+                failed = [r for r in result.repo_results if r.status == "error"]
+                if failed:
+                    lines.append("")
+                    lines.extend(f"Failed for `{r.target_repo}`: {r.error}" for r in failed)
+                await deps.jira.add_comment(result.jira_issue.key, "\n".join(lines))
+            elif result.status in ("tests_failed", "error", "no_repo_matched"):
+                reason = result.error or "See the run details."
+                if result.status == "no_repo_matched":
+                    reason = "None of the configured repos' routing labels matched this page."
                 await deps.jira.add_comment(
                     result.jira_issue.key,
                     f"This change could not be completed automatically:\n\n{reason}\n\n"
@@ -318,7 +537,9 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                 page_title=page.title if page else "",
                 confluence_url=page.url if page else "",
                 engine=settings.change_agent_engine,
-                target_repo=settings.target_repo,
+                target_repo=(
+                    ", ".join(r.target_repo for r in result.repo_results) if result.repo_results else all_configured_repos
+                ),
                 status=result.status,
                 current_stage=progress["stage"],
                 files_changed=change.files_changed if change else [],
@@ -343,6 +564,7 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                 jira_issue_key=result.jira_issue.key if result.jira_issue else None,
                 jira_issue_url=result.jira_issue.url if result.jira_issue else None,
                 jira_reused=result.jira_reused,
+                repo_results=result.repo_results,
             )
         )
         return result
@@ -502,65 +724,73 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                 # success further down.
                 deps.store.remember_jira_issue(page_id, jira_issue.key)
 
-        repo_dir = settings.workdirs_path / f"page-{page_id}-v{page.version}"
-
-        # If a PR from a previous run for this page is still open, reuse its
-        # branch instead of opening a duplicate PR -- keeps one PR thread per
-        # page for reviewers rather than fragmenting across several. Checked
-        # fresh against the GitHub API every run (not assumed from the page
-        # store's cache alone), since a human may have merged or closed it
-        # since. Every step here fails open: any lookup/checkout problem
-        # just falls back to today's default of a brand-new branch and PR.
-        reuse_pr_number: int | None = None
-        reuse_branch: str | None = None
-        if previous_page and previous_page.get("open_pr_number") and previous_page.get("open_pr_branch"):
-            try:
-                pr_status = await deps.github.get_pull_request(settings.target_repo, previous_page["open_pr_number"])
-                if pr_status.is_open:
-                    reuse_pr_number = previous_page["open_pr_number"]
-                    reuse_branch = previous_page["open_pr_branch"]
-            except Exception as exc:
-                logger.warning(
-                    "Could not check status of previously-opened PR #%s for page %s; opening a new PR instead: %s",
-                    previous_page["open_pr_number"], page_id, exc,
+        # Which repo(s) is this change actually for -- see config.py's
+        # resolved_repo_targets docstring for the label-matching semantics
+        # (empty label = matches every page, same as CONFLUENCE_ALLOWED_
+        # LABELS). Always at least one entry for every existing user (the
+        # single-repo fallback), so "no repo matched" only happens for a
+        # real multi-repo config where this page's labels don't select any
+        # of them.
+        page_labels = {label.lower() for label in page.labels}
+        repo_targets = settings.resolved_repo_targets
+        in_scope = [rt for rt in repo_targets if not rt.label or rt.label.lower() in page_labels]
+        if not in_scope:
+            logger.info(
+                "Page %s labels %s don't match any configured repo's routing label; nothing to implement.",
+                page_id, sorted(page_labels),
+            )
+            return await finish(
+                PipelineResult(
+                    status="no_repo_matched", page=page, diff=diff, jira_issue=jira_issue, jira_reused=jira_reused,
                 )
+            )
 
-        branch_name = reuse_branch or f"confluence-sync/page-{page_id}-v{page.version}-{int(time.time())}"
+        # Nested per-repo subdirectories only for a genuinely multi-repo
+        # config -- keeps the workspace layout (and thus repo_dir itself)
+        # byte-identical to before this feature existed for every existing
+        # single-repo user, rather than varying page-to-page depending on
+        # how many configured repos happen to match a given page's labels.
+        is_multi_repo = bool(settings.target_repos_json.strip())
+        workspace = settings.workdirs_path / f"page-{page_id}-v{page.version}"
+        repo_dirs: dict[str, Path] = {
+            rt.target_repo: (workspace / _repo_slug(rt.target_repo)) if is_multi_repo else workspace
+            for rt in in_scope
+        }
 
+        # Clone + branch setup per repo -- each repo's own PR-reuse check is
+        # fully independent (see _setup_repo_branch); this must all happen
+        # before the shared change-engine call below, since that call edits
+        # whatever's already on disk.
         mark_stage("clone_repo")
-        await deps.git.clone(settings.target_repo, repo_dir, settings.target_repo_base_branch)
-        if reuse_branch:
-            try:
-                await deps.git.checkout_existing_branch(repo_dir, branch_name)
-                logger.info(
-                    "PR #%s for page %s is still open; reusing its branch instead of opening a new PR.",
-                    reuse_pr_number, page_id,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Could not check out existing PR branch %s for page %s; opening a new PR instead: %s",
-                    branch_name, page_id, exc,
-                )
-                reuse_pr_number = None
-                reuse_branch = None
-                branch_name = f"confluence-sync/page-{page_id}-v{page.version}-{int(time.time())}"
-                await deps.git.create_branch(repo_dir, branch_name)
-        else:
-            await deps.git.create_branch(repo_dir, branch_name)
+        branch_info: dict[str, tuple[str, int | None, bool]] = {}
+        for rt in in_scope:
+            branch_info[rt.target_repo] = await _setup_repo_branch(
+                deps, rt, repo_dirs[rt.target_repo], page_id, page, previous_page
+            )
+
+        if is_multi_repo:
+            diff.repo_context = build_repo_context(in_scope, repo_dirs, workspace)
 
         # Self-correction loop: give the change engine up to N attempts,
-        # feeding the previous attempt's test failure back into its prompt
-        # each retry, before giving up. Attempt 1 is today's original
-        # behavior; CHANGE_AGENT_MAX_ATTEMPTS=1 disables retrying entirely.
+        # feeding back the previous attempt's test failures (across every
+        # touched repo) each retry, before giving up. Attempt 1 is today's
+        # original behavior; CHANGE_AGENT_MAX_ATTEMPTS=1 disables retrying
+        # entirely. One shared attempt budget across the whole (possibly
+        # multi-repo) change, not per repo -- retrying just one repo in
+        # isolation could reintroduce the cross-repo inconsistency this
+        # design exists to prevent, and no PR opens for ANY repo unless the
+        # whole joint edit's tests pass together (see the tests_failed
+        # return below -- a partial success isn't a real success here).
         max_attempts = max(1, settings.change_agent_max_attempts)
         change: ChangeAgentResult | None = None
-        tests = None
+        repo_tests: dict[str, RepoTestResult] = {}
+        attempt = 1
         retry_context: str | None = None
 
         for attempt in range(1, max_attempts + 1):
             mark_stage("ai_agent")
             change = await deps.change_engine.implement_change(
-                repo_dir, diff, settings.change_agent_max_turns, retry_context=retry_context
+                workspace, diff, settings.change_agent_max_turns, retry_context=retry_context
             )
 
             if not change.success:
@@ -575,9 +805,13 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                     )
                 )
 
-            if not await deps.git.has_changes(repo_dir):
+            touched = {
+                rt.target_repo: rt for rt in in_scope if await deps.git.has_changes(repo_dirs[rt.target_repo])
+            }
+            if not touched:
                 logger.warning(
-                    "Change agent made no file changes for page %s (attempt %s/%s)", page_id, attempt, max_attempts
+                    "Change agent made no file changes in any in-scope repo for page %s (attempt %s/%s)",
+                    page_id, attempt, max_attempts,
                 )
                 return await finish(
                     PipelineResult(
@@ -586,209 +820,178 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                     )
                 )
 
-            change.files_changed = await deps.git.changed_files(repo_dir)
-
             mark_stage("run_tests")
-            tests = await run_tests(repo_dir, settings.target_repo_test_command)
-            if tests.passed:
+            repo_tests = {}
+            all_changed_files: list[str] = []
+            for target_repo, rt in touched.items():
+                repo_dir = repo_dirs[target_repo]
+                files = await deps.git.changed_files(repo_dir)
+                all_changed_files.extend(
+                    f"{_repo_slug(target_repo)}/{f}" if is_multi_repo else f for f in files
+                )
+                repo_tests[target_repo] = await run_tests(repo_dir, rt.test_command)
+            change.files_changed = all_changed_files
+
+            if all(t.passed for t in repo_tests.values()):
                 break
 
             if attempt == max_attempts:
                 logger.error(
-                    "Tests still failing for page %s after %s attempt(s); not opening a PR.", page_id, attempt
+                    "Tests still failing for page %s after %s attempt(s); not opening any PR.", page_id, attempt
                 )
+                failing = [target_repo for target_repo, t in repo_tests.items() if not t.passed]
                 return await finish(
                     PipelineResult(
-                        status="tests_failed", page=page, diff=diff, change=change, tests=tests, attempts=attempt,
+                        status="tests_failed", page=page, diff=diff, change=change,
+                        tests=repo_tests[failing[0]], attempts=attempt,
                         jira_issue=jira_issue, jira_reused=jira_reused,
+                        repo_results=[
+                            RepoChangeResult(
+                                target_repo=target_repo, status="tests_failed" if not t.passed else "no_changes",
+                                tests=t,
+                            )
+                            for target_repo, t in repo_tests.items()
+                        ],
                     )
                 )
 
             logger.warning(
-                "Tests failed for page %s on attempt %s/%s; retrying with the failure fed back to the agent.",
+                "Tests failed for page %s on attempt %s/%s; retrying with the failures fed back to the agent.",
                 page_id, attempt, max_attempts,
             )
-            retry_context = tests.output[-8000:]
+            retry_context = "\n\n".join(
+                f"[{target_repo}]\n{t.output[-4000:]}" for target_repo, t in repo_tests.items() if not t.passed
+            )
 
-        judge_result: JudgeResult | None = None
-        if settings.judge_enabled:
-            mark_stage("llm_judge")
-            if not judge_configured(settings):
-                judge_result = JudgeResult(
-                    verdict="skipped",
-                    reasoning=(
-                        f"No API key configured for judge provider '{settings.judge_provider}'; "
-                        "skipping LLM review."
-                    ),
-                )
-                logger.info(
-                    "Skipping LLM judge for page %s: no API key configured for provider '%s'.",
-                    page_id,
-                    settings.judge_provider,
-                )
-            else:
-                try:
-                    code_diff = await deps.git.diff(repo_dir)
-                    judge_result = await deps.judge.evaluate(diff, change, code_diff)
-                except Exception as exc:
-                    # Fail open, same reasoning as the email step below: the
-                    # judge is a second opinion, not the source of truth, so
-                    # an unreliable API call must not turn an otherwise good
-                    # change into a lost PR.
-                    logger.warning(
-                        "LLM judge failed for page %s; proceeding without review: %s", page_id, exc
-                    )
-                    judge_result = JudgeResult(
-                        verdict="skipped", reasoning=f"Judge call failed; proceeding without review: {exc}"
-                    )
-
-            if judge_result.verdict == "rejected":
-                logger.warning(
-                    "LLM judge rejected the change for page %s: %s -- opening a flagged draft PR anyway.",
-                    page_id, judge_result.reasoning,
-                )
-
-        # The judge is advisory, not a gate: a "rejected" verdict changes the
-        # kind of PR that opens (draft, flagged title, "Needs review" callout
-        # in the rubric) but never stops one from opening at all.
-        is_rejected = judge_result is not None and judge_result.verdict == "rejected"
-
+        # Per-repo finalize: commit/push/open-or-update PR/judge. Each
+        # repo's own failure (PR API error, judge call) only affects its own
+        # RepoChangeResult -- see _finalize_repo and _aggregate_status.
         mark_stage("open_pr")
-        commit_message = f"Sync with Confluence spec: {page.title} (v{page.version})\n\n{change.summary}"
-        await deps.git.commit_all(repo_dir, commit_message)
-
-        pr_title = f"Sync with Confluence: {page.title} (v{page.version})"
-        if is_rejected:
-            pr_title = f"[Needs Work] {pr_title}"
-
-        pr_body = _build_pr_body(page, diff, change, judge_result)
-        verdict_for_labels = judge_result.verdict if judge_result else "approved"
-
-        if reuse_branch:
-            try:
-                await deps.git.push(repo_dir, branch_name)
-                pr_body = (
-                    f"_Updated automatically: the spec changed again (v{diff.previous_version} -> "
-                    f"v{page.version}) while this PR was still open, so it was updated in place "
-                    "instead of opening a new one._\n\n"
-                ) + pr_body
-                pull_request = await deps.github.update_pull_request(
-                    owner_repo=settings.target_repo, pr_number=reuse_pr_number, title=pr_title, body=pr_body,
-                )
-            except Exception as exc:
-                # Unlike the lookup/checkout above, this can't fall back to
-                # "just open a new PR instead" -- the agent's new commits are
-                # already sitting on the existing branch. Surface it as a
-                # normal error; retried from the same diff on the next
-                # webhook, same as any other push/API failure.
-                logger.exception("Failed to update existing PR #%s for page %s", reuse_pr_number, page_id)
-                return await finish(
-                    PipelineResult(
-                        status="error", page=page, diff=diff, change=change, tests=tests,
-                        error=f"failed to update existing PR #{reuse_pr_number}: {exc}", attempts=attempt,
-                        jira_issue=jira_issue, jira_reused=jira_reused,
-                    )
-                )
-        else:
-            await deps.git.push(repo_dir, branch_name)
-            pull_request = await deps.github.open_pull_request(
-                owner_repo=settings.target_repo,
-                head_branch=branch_name,
-                base_branch=settings.target_repo_base_branch,
-                title=pr_title,
-                body=pr_body,
-                draft=is_rejected,
-            )
-
-        await _sync_verdict_label(deps.github, settings.target_repo, pull_request.number, verdict_for_labels)
-
-        # A durable artifact (the PR) now exists for this diff either way,
-        # so the store advances regardless of the judge's verdict -- a retry
-        # from the same diff on the next webhook would otherwise open a
-        # second, duplicate PR alongside this one. Tracking the PR here is
-        # also what makes the *next* run's reuse check possible.
-        deps.store.put(
-            StoredPage(
-                page_id=page.page_id,
-                title=page.title,
-                version=page.version,
-                body_html=page.body_html,
-                body_checksum=diff.body_checksum,
-                url=page.url,
-                open_pr_number=pull_request.number,
-                open_pr_branch=pull_request.branch,
-                jira_issue_key=jira_issue.key if jira_issue else None,
-            )
-        )
-
-        if is_rejected:
-            logger.info(
-                "%s flagged draft PR #%s for page %s: %s",
-                "Updated" if reuse_branch else "Opened", pull_request.number, page_id, pull_request.url,
-            )
-            return await finish(
-                PipelineResult(
-                    status="judge_rejected",
-                    page=page,
-                    diff=diff,
-                    change=change,
-                    tests=tests,
-                    judge=judge_result,
-                    pull_request=pull_request,
-                    reused_pr=bool(reuse_branch),
-                    attempts=attempt,
-                    jira_issue=jira_issue,
-                    jira_reused=jira_reused,
+        repo_results: list[RepoChangeResult] = []
+        for rt in in_scope:
+            if rt.target_repo not in repo_tests:
+                # In scope for this page, but the agent decided nothing
+                # needed to change there this run.
+                repo_results.append(RepoChangeResult(target_repo=rt.target_repo, status="no_changes"))
+                continue
+            branch_name, reuse_pr_number, reused = branch_info[rt.target_repo]
+            repo_results.append(
+                await _finalize_repo(
+                    deps, rt, repo_dirs[rt.target_repo], branch_name, reuse_pr_number, reused,
+                    page, diff, change, settings.judge_enabled,
                 )
             )
 
-        # Best-effort and deliberately isolated: the PR is already open at
-        # this point, so a broken/unconfigured email step must not turn a
-        # successful run into a reported failure (it did, before this was
-        # fixed -- a blank SENDGRID_API_KEY produced an unhandled
-        # httpx.LocalProtocolError here that the outer `except` caught,
-        # discarding the pull_request from the recorded result entirely).
+        # A durable artifact (a PR) now exists for whichever repos
+        # succeeded, so the store advances for those regardless of any
+        # other repo's verdict/failure -- a retry from the same diff would
+        # otherwise re-attempt (and potentially duplicate) an
+        # already-successful repo's PR too. Merges with whatever repo_prs a
+        # previous run left for repos NOT touched this time (see
+        # _repo_pr_info's docstring) so their reuse tracking isn't lost.
+        opened_results = [r for r in repo_results if r.pull_request]
+        if opened_results:
+            merged_repo_prs: dict = dict((previous_page or {}).get("repo_prs") or {})
+            for r in opened_results:
+                merged_repo_prs[r.target_repo] = {
+                    "open_pr_number": r.pull_request.number,
+                    "open_pr_branch": r.pull_request.branch,
+                }
+            primary = opened_results[0].pull_request
+            deps.store.put(
+                StoredPage(
+                    page_id=page.page_id,
+                    title=page.title,
+                    version=page.version,
+                    body_html=page.body_html,
+                    body_checksum=diff.body_checksum,
+                    url=page.url,
+                    open_pr_number=primary.number,
+                    open_pr_branch=primary.branch,
+                    repo_prs=merged_repo_prs,
+                    jira_issue_key=jira_issue.key if jira_issue else None,
+                )
+            )
+
+        overall_status = _aggregate_status(repo_results)
+
+        # Best-effort and deliberately isolated, same reasoning as before:
+        # PRs are already open (for whichever repos succeeded) at this
+        # point, so a broken/unconfigured email step must not turn an
+        # otherwise successful run into a reported failure. One email per
+        # cleanly-opened/updated PR -- simpler and just as actionable as a
+        # single combined email, without needing a new multi-PR email
+        # template. Deliberately excludes judge_rejected repos, same as the
+        # single-repo behavior this replaces -- the judge's Jira comment
+        # already covers "needs review", a separate "PR opened" email would
+        # read as a false all-clear.
         mark_stage("send_email")
         email_sent = False
         email_error: str | None = None
-        email_key = settings.postmark_api_key if settings.email_provider.strip().lower() == "postmark" else settings.sendgrid_api_key
-        if not email_key:
-            email_error = f"No API key configured for email provider '{settings.email_provider}'; skipped"
-            logger.info("Skipping summary email for PR #%s: %s", pull_request.number, email_error)
-        else:
-            try:
-                subject, text_body, html_body = build_summary_email(diff, change, pull_request)
-                await deps.email_client.send_email(
-                    from_address=settings.email_from_address,
-                    to_addresses=settings.email_to_list,
-                    subject=subject,
-                    text_body=text_body,
-                    html_body=html_body,
-                )
-                email_sent = True
-            except Exception as exc:
-                email_error = str(exc)
-                logger.warning("PR #%s opened but the summary email failed to send: %s", pull_request.number, exc)
+        email_targets = [r for r in repo_results if r.status == "opened_pr"]
+        if email_targets:
+            email_key = (
+                settings.postmark_api_key
+                if settings.email_provider.strip().lower() == "postmark"
+                else settings.sendgrid_api_key
+            )
+            if not email_key:
+                email_error = f"No API key configured for email provider '{settings.email_provider}'; skipped"
+                logger.info("Skipping summary email for page %s: %s", page_id, email_error)
+            else:
+                any_sent = False
+                last_error: str | None = None
+                for r in email_targets:
+                    try:
+                        subject, text_body, html_body = build_summary_email(diff, change, r.pull_request)
+                        await deps.email_client.send_email(
+                            from_address=settings.email_from_address,
+                            to_addresses=settings.email_to_list,
+                            subject=subject,
+                            text_body=text_body,
+                            html_body=html_body,
+                        )
+                        any_sent = True
+                    except Exception as exc:
+                        last_error = str(exc)
+                        logger.warning(
+                            "PR #%s (%s) opened but the summary email failed to send: %s",
+                            r.pull_request.number, r.target_repo, exc,
+                        )
+                email_sent = any_sent
+                email_error = last_error
 
-        logger.info(
-            "%s PR #%s for page %s: %s",
-            "Updated" if reuse_branch else "Opened", pull_request.number, page_id, pull_request.url,
-        )
+        for r in repo_results:
+            if r.pull_request:
+                logger.info(
+                    "%s PR #%s for %s on page %s: %s",
+                    "Updated" if r.reused_pr else "Opened", r.pull_request.number, r.target_repo, page_id,
+                    r.pull_request.url,
+                )
+            elif r.status == "error":
+                logger.error("Failed to finalize %s for page %s: %s", r.target_repo, page_id, r.error)
+
         return await finish(
             PipelineResult(
-                status="opened_pr",
+                status=overall_status,
                 page=page,
                 diff=diff,
                 change=change,
-                tests=tests,
-                judge=judge_result,
-                pull_request=pull_request,
-                reused_pr=bool(reuse_branch),
+                judge=next((r.judge for r in repo_results if r.judge), None),
+                pull_request=opened_results[0].pull_request if opened_results else None,
+                reused_pr=opened_results[0].reused_pr if opened_results else False,
+                # A backward-compat single summary string for the existing
+                # single-repo-shaped UI (run_detail.html's "Error" row) --
+                # the full per-repo detail is always in repo_results.
+                error=(
+                    "; ".join(f"{r.target_repo}: {r.error}" for r in repo_results if r.error) or None
+                ),
                 email_sent=email_sent,
                 email_error=email_error,
                 attempts=attempt,
                 jira_issue=jira_issue,
                 jira_reused=jira_reused,
+                repo_results=repo_results,
             )
         )
 

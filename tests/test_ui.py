@@ -78,14 +78,14 @@ def test_config_form_renders_taglist_editor_for_allowed_labels(client, _isolated
 def test_saving_config_writes_env_file(client, _isolated_env_file):
     resp = client.post(
         "/ui/config",
-        data={"TARGET_REPO": "acme/widgets", "CHANGE_AGENT_ENGINE": "cursor"},
+        data={"TARGET_REPOS_JSON": '[{"target_repo": "acme/widgets"}]', "CHANGE_AGENT_ENGINE": "cursor"},
         follow_redirects=False,
     )
     assert resp.status_code == 303
     assert resp.headers["location"] == "/ui/config?saved=1"
 
     content = _isolated_env_file.read_text()
-    assert "TARGET_REPO=acme/widgets" in content
+    assert 'TARGET_REPOS_JSON=[{"target_repo": "acme/widgets"}]' in content
     assert "CHANGE_AGENT_ENGINE=cursor" in content
 
 
@@ -103,13 +103,13 @@ def test_saving_config_survives_env_file_being_unrenamable(client, _isolated_env
 
     resp = client.post(
         "/ui/config",
-        data={"TARGET_REPO": "acme/widgets"},
+        data={"TARGET_REPOS_JSON": '[{"target_repo": "acme/widgets"}]'},
         follow_redirects=False,
     )
     assert resp.status_code == 303
 
     content = _isolated_env_file.read_text()
-    assert "TARGET_REPO=acme/widgets" in content
+    assert 'TARGET_REPOS_JSON=[{"target_repo": "acme/widgets"}]' in content
 
 
 def test_blank_secret_field_does_not_clear_existing_value(client, _isolated_env_file):

@@ -81,7 +81,18 @@
       </td>
       <td>{% if run.status == "running" %}&mdash;{% else %}{{ "%.1f"|format(run.duration_seconds) }}s{% endif %}</td>
       <td>
-        {% if run.pr_url %}
+        {% if run.repo_results and run.repo_results|length > 1 %}
+          {% for rr in run.repo_results %}
+            {% if rr.pull_request %}
+              <div{% if not loop.last %} style="margin-bottom: 0.3rem;"{% endif %}>
+                <span class="hint" style="display: inline;">{{ rr.target_repo.split("/")[-1] }}:</span>
+                <a class="pr-link" href="{{ rr.pull_request.url }}" target="_blank" rel="noopener">#{{ rr.pull_request.number }} &rarr;</a>
+                {% if rr.pull_request.draft %}<span class="badge badge-warning">draft</span>{% endif %}
+              </div>
+            {% endif %}
+          {% endfor %}
+          {% if not (run.repo_results | selectattr("pull_request") | list) %}&mdash;{% endif %}
+        {% elif run.pr_url %}
           <a class="pr-link" href="{{ run.pr_url }}" target="_blank" rel="noopener">#{{ run.pr_number }} &rarr;</a>{% if run.pr_draft %} <span class="badge badge-warning">draft</span>{% endif %}
         {% else %}
           &mdash;
