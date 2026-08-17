@@ -9,6 +9,9 @@
   <h1>
     {{ run.page_title or run.page_id }}
     <span class="badge badge-{{ run.status }}" style="vertical-align: middle; margin-left: 0.5rem;">{{ run.status | status_label }}</span>
+    {% if run.flagged_scope_gap %}
+      <span class="badge badge-warning" style="vertical-align: middle;">⚠️ more action needed</span>
+    {% endif %}
   </h1>
   <p class="subtitle">Run <code>{{ run.run_id }}</code> &middot; engine <strong>{{ run.engine }}</strong>
     {% if run.status != "running" %} &middot; {{ "%.1f"|format(run.duration_seconds) }}s{% endif %}</p>
@@ -22,6 +25,28 @@
     The LLM judge found at least one criterion clearly unmet — this PR still opened automatically
     as a <strong>draft</strong>, flagged for review, so nothing is lost. See the rubric below for
     specifics, then fix in place on the branch or close it.
+  </div>
+  {% endif %}
+
+  {% if run.flagged_scope_gap %}
+  <div class="banner" style="background: var(--warning-bg); border-color: var(--warning-border); color: var(--warning-text); display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;">
+    <span>
+      The agent's summary below flags that this change likely needs a repo it didn't have checked
+      out here. Add the label(s) it named to the Confluence page, then Retrigger — a label-only
+      edit won't produce a new diff on its own, but Retrigger reprocesses the page's current
+      content and labels regardless.
+    </span>
+    <form method="post" action="/ui/runs/{{ run.run_id }}/retrigger"
+          onsubmit="return confirm('Force-reprocess this page now against its current content and labels?');">
+      <button type="submit" class="btn-secondary" style="white-space: nowrap;">Retrigger</button>
+    </form>
+  </div>
+  {% elif run.status != "running" %}
+  <div style="margin-bottom: 1.25rem;">
+    <form method="post" action="/ui/runs/{{ run.run_id }}/retrigger"
+          onsubmit="return confirm('Force-reprocess this page now, even though nothing may have textually changed since?');">
+      <button type="submit" class="btn-secondary">Retrigger</button>
+    </form>
   </div>
   {% endif %}
 

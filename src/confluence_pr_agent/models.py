@@ -27,6 +27,13 @@ class PageDiff:
     is_first_seen: bool
     body_checksum: str  # sha256 of page's normalized plain-text body -- see confluence/diff.py
     content_unchanged: bool = False  # version bumped (e.g. metadata edit) but checksum matched
+    # True when a human hit "Retrigger" on a run whose page had no textual
+    # change since -- see confluence/diff.py::compute_diff's `force` param
+    # and ui/routes.py's retrigger route. The usual case: labels were added
+    # to route a previously-flagged repo gap in, but nobody edited the page
+    # body (a label-only edit doesn't change body_checksum, so without this
+    # the run would just re-hit content_unchanged and skip again).
+    forced: bool = False
     # Set by pipeline/orchestrator.py only for a genuinely multi-repo run --
     # a short description of which repos are checked out as which
     # subdirectories of the agent's working directory, so a coupled change
@@ -261,3 +268,14 @@ class RunRecord:
     # records predating this field simply won't have the key -- Jinja's
     # Undefined handles that as empty, not an error.
     repo_results: list[RepoChangeResult] = field(default_factory=list)
+    # True when the change agent's own summary flagged that this change
+    # likely needs a repo outside what was checked out for this run -- see
+    # agent/prompts.py::build_repo_context's out-of-scope section, which
+    # instructs the agent to end its summary with a "Next steps" section
+    # naming the repo(s)/label(s) still needed. Detected structurally off
+    # that exact heading (set once in orchestrator.py::finish), not
+    # re-derived from free text in the template every render -- deliberately
+    # NOT set just because this user has other configured repos out of
+    # scope (that's the normal, expected case for most multi-repo changes);
+    # it only fires when the agent itself judged a real gap exists.
+    flagged_scope_gap: bool = False

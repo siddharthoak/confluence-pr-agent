@@ -388,6 +388,45 @@ def test_delete_all_runs_clears_everything(client):
     assert store.list_runs() == []
 
 
+def test_retrigger_run_forces_a_rerun_of_the_same_page(client, monkeypatch):
+    """The route must resolve page_id from the stored run (not trust a
+    client-supplied one) and call retrigger_page with it -- see
+    ui/routes.py's docstring for why. TestClient runs FastAPI
+    BackgroundTasks in-process before returning (same as the webhook/simulate
+    flow), so the mock is already called by the time this assertion runs.
+    """
+    store = RunStore(get_settings("testuser").runs_store_path)
+    _seed_runs(store)
+
+    calls = []
+
+    async def _fake_retrigger_page(settings, page_id):
+        calls.append((settings.data_dir, page_id))
+
+    monkeypatch.setattr(ui_routes, "retrigger_page", _fake_retrigger_page)
+
+    resp = client.post("/ui/runs/run-claude-ok/retrigger", follow_redirects=False)
+
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/ui/runs"
+    assert len(calls) == 1
+    assert calls[0][1] == "1"  # run-claude-ok's page_id, from _seed_runs
+
+
+def test_retrigger_run_is_a_noop_for_an_unknown_run_id(client, monkeypatch):
+    calls = []
+
+    async def _fake_retrigger_page(settings, page_id):
+        calls.append(page_id)
+
+    monkeypatch.setattr(ui_routes, "retrigger_page", _fake_retrigger_page)
+
+    resp = client.post("/ui/runs/does-not-exist/retrigger", follow_redirects=False)
+
+    assert resp.status_code == 303
+    assert calls == []
+
+
 def test_run_detail_page_shows_full_record_including_usage_and_raw_log(client):
     settings = get_settings("testuser")
     store = RunStore(settings.runs_store_path)

@@ -41,6 +41,24 @@ def _lock_for(settings: Settings) -> asyncio.Lock:
     return _poll_locks.setdefault(settings.data_dir, asyncio.Lock())
 
 
+async def retrigger_page(settings: Settings, page_id: str) -> PipelineResult:
+    """Force-reprocesses one known page regardless of whether its content
+    changed since the last run -- the "Retrigger" button's backing call
+    (ui/routes.py), for the corrective-relabeling path: a human adds the
+    routing label(s) the agent's own "Next steps" note asked for, then
+    retriggers instead of also needing a throwaway edit to the page body
+    just to produce a fresh diff (a label-only change doesn't move
+    body_checksum -- see confluence/diff.py). No per-user lock here unlike
+    poll_once: this is one specific page a human explicitly asked to
+    reprocess, not a label-based discovery pass that could race with itself.
+    """
+    deps = build_deps(settings)
+    try:
+        return await run_pipeline(page_id, deps=deps, force=True)
+    finally:
+        await deps.confluence.aclose()
+
+
 async def poll_once(settings: Settings) -> list[PipelineResult]:
     """One poll cycle for one user: discover pages, run the pipeline for
     each, return every result. Builds a single PipelineDeps and reuses it

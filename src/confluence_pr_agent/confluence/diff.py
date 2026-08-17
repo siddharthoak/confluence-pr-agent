@@ -11,6 +11,10 @@ real pipeline run (clone + change engine + tests + PR):
    "restore this version"). If the version moved but the sha256 of the
    normalized plain-text body matches what we last processed, treat it the
    same as no change -- skips the (more expensive) diff computation too.
+
+Both guards are bypassable via `force=True` (the "Retrigger" button, see
+ui/routes.py) -- see `_forced_reprocess_diff` for what the agent gets
+instead of an empty diff in that case.
 """
 
 from __future__ import annotations
@@ -42,7 +46,33 @@ def compute_checksum(plain_text: str) -> str:
     return hashlib.sha256(plain_text.encode("utf-8")).hexdigest()
 
 
-def compute_diff(store: PageStore, page: PageSnapshot) -> PageDiff:
+def _forced_reprocess_diff(page: PageSnapshot, previous_version: int, new_text: str, new_checksum: str) -> PageDiff:
+    """A human hit "Retrigger" on a page with no textual change since the
+    last run -- typically because they added a routing label the agent
+    asked for (see agent/prompts.py's out-of-scope note) without also
+    editing the body, which a label-only change never does (labels aren't
+    part of body_checksum). Gives the agent the full current spec, same
+    framing as first-seen, so a newly-in-scope repo gets implemented from
+    scratch while an already-in-scope one (whose branch already has the
+    prior work) correctly finds nothing left to do.
+    """
+    diff_text = (
+        "(Manually force-retriggered -- no textual change was detected in the page body "
+        "since the last run, but the repo scope may have changed (e.g. a routing label "
+        "was added). Re-implement the feature described below to the extent it is not "
+        "already implemented in each repo checked out for this run.)\n\n" + new_text
+    )
+    return PageDiff(
+        page=page,
+        previous_version=previous_version,
+        diff_text=diff_text,
+        is_first_seen=False,
+        body_checksum=new_checksum,
+        forced=True,
+    )
+
+
+def compute_diff(store: PageStore, page: PageSnapshot, force: bool = False) -> PageDiff:
     previous = store.get(page.page_id)
     new_text = _to_plain_text(page.body_html)
     new_checksum = compute_checksum(new_text)
@@ -61,6 +91,8 @@ def compute_diff(store: PageStore, page: PageSnapshot) -> PageDiff:
         )
 
     if previous["version"] == page.version:
+        if force:
+            return _forced_reprocess_diff(page, previous["version"], new_text, new_checksum)
         return PageDiff(
             page=page,
             previous_version=previous["version"],
@@ -71,6 +103,8 @@ def compute_diff(store: PageStore, page: PageSnapshot) -> PageDiff:
 
     previous_checksum = previous.get("body_checksum", "")
     if previous_checksum and previous_checksum == new_checksum:
+        if force:
+            return _forced_reprocess_diff(page, previous["version"], new_text, new_checksum)
         return PageDiff(
             page=page,
             previous_version=previous["version"],

@@ -66,8 +66,12 @@ def build_repo_context(
             "example, a patient-facing behavior change that needs a UI update, or a new field "
             "that needs a schema change), do not guess at their contents or invent a change "
             "there. Implement everything that is genuinely addressable in the repo(s) you do "
-            "have checked out, and end your summary with an explicit note naming which repo(s) "
-            "still need a change and why, so a human can add the right label and re-run."
+            "have checked out, and end your summary with a 'Next steps' section written as an "
+            "instruction to the human reviewing this PR, not just a description of the gap: name "
+            "the exact routing label (from the list above, e.g. `repo-ui`) they need to add to "
+            "the Confluence page for each still-needed repo, and tell them to re-run the pipeline "
+            "afterward -- re-running also requires a real edit to the page body (even a small "
+            "one), not just adding the label, since a label-only change won't be picked up."
         )
     return "\n".join(lines)
 

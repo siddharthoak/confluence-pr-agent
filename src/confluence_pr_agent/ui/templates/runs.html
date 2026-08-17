@@ -75,6 +75,9 @@
         {% if run.judge_verdict == "approved_with_warnings" %}
           <span class="badge badge-warning" title="LLM judge approved with warnings — worth a second look">⚠️ warning</span>
         {% endif %}
+        {% if run.flagged_scope_gap %}
+          <span class="badge badge-warning" title="The agent flagged that this change likely needs a repo it didn't have checked out — see its summary for which one(s).">⚠️ more action needed</span>
+        {% endif %}
         {% if run.status == "running" and run.current_stage %}
           <div class="hint" style="margin-top: 0.25rem;">{{ run.current_stage | stage_label }}&hellip;</div>
         {% endif %}
@@ -98,8 +101,14 @@
           &mdash;
         {% endif %}
       </td>
-      <td>
-        <form method="post" action="/ui/runs/{{ run.run_id }}/delete"
+      <td style="white-space: nowrap;">
+        {% if run.status != "running" %}
+        <form method="post" action="/ui/runs/{{ run.run_id }}/retrigger" style="display: inline;"
+              onsubmit="return confirm('Force-reprocess this page now, even though nothing may have textually changed since? Re-runs the full pipeline (agent, tests, PR) against its current content and labels.');">
+          <button type="submit" class="btn-secondary" title="Reprocess this page now, regardless of whether it changed since">Retrigger</button>
+        </form>
+        {% endif %}
+        <form method="post" action="/ui/runs/{{ run.run_id }}/delete" style="display: inline;"
               onsubmit="return confirm('Delete this run record?');">
           <button type="submit" class="btn-danger">Delete</button>
         </form>

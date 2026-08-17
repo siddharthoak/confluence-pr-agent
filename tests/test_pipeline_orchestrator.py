@@ -116,6 +116,28 @@ async def test_no_change_detected_skips_everything(settings):
     deps.email_client.send_email.assert_not_called()
 
 
+async def test_force_reprocesses_a_page_with_no_detected_change(settings, monkeypatch):
+    """The Retrigger button's backing case: same version/checksum as last
+    time (e.g. only a label was added), but force=True means process it
+    anyway instead of short-circuiting to no_change_detected."""
+    page = _page(1)
+    deps = _make_deps(settings, page=page)
+    deps.store.put(_stored(1, page.body_html, page.url))
+
+    async def _fake_run_tests(repo_dir, command):
+        return RepoTestResult(passed=True, output="2 passed", command=command)
+
+    monkeypatch.setattr(orchestrator, "run_tests", _fake_run_tests)
+
+    result = await run_pipeline("123456", deps=deps, force=True)
+
+    assert result.status == "opened_pr"
+    assert result.diff is not None
+    assert result.diff.forced is True
+    deps.change_engine.implement_change.assert_awaited_once()
+    deps.github.open_pull_request.assert_awaited_once()
+
+
 async def test_page_without_required_label_is_ignored_before_any_real_work(settings):
     settings.confluence_allowed_labels = "brd,spec-for-agent"
     page = _page(1, labels=["meeting-notes"])
@@ -202,6 +224,34 @@ async def test_successful_change_opens_pr_and_emails_team(settings, monkeypatch)
     assert runs[0]["current_stage"] == "send_email"
     assert runs[0]["spec_diff"] is not None
     assert "spec v2" in runs[0]["spec_diff"]
+    assert runs[0]["flagged_scope_gap"] is False  # default summary has no "Next steps" heading
+
+
+async def test_flagged_scope_gap_true_when_agent_summary_has_next_steps_heading(settings, monkeypatch):
+    """Structural detection, not free-text guessing -- see
+    agent/prompts.py's out-of-scope section, which instructs the agent to
+    use exactly this heading when it judges another repo is genuinely
+    needed. RunRecord.flagged_scope_gap is what drives the "more action
+    needed" badge in runs.html/run_detail.html.
+    """
+    page = _page(2, body="<p>spec v2</p>")
+    deps = _make_deps(settings, page=page)
+    deps.store.put(_stored(1, "<p>spec v1</p>", page.url))
+    deps.change_engine.implement_change.return_value = ChangeAgentResult(
+        success=True,
+        summary="Implemented the API-side check.\n\nNext steps: add the `repo-ui` label and retrigger.",
+    )
+
+    async def _fake_run_tests(repo_dir, command):
+        return RepoTestResult(passed=True, output="2 passed", command=command)
+
+    monkeypatch.setattr(orchestrator, "run_tests", _fake_run_tests)
+
+    result = await run_pipeline("123456", deps=deps)
+
+    assert result.status == "opened_pr"
+    runs = deps.run_store.list_runs()
+    assert runs[0]["flagged_scope_gap"] is True
 
 
 def _enable_jira(settings) -> None:

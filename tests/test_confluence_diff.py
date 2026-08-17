@@ -98,3 +98,52 @@ def test_checksum_ignores_insignificant_html_differences(tmp_path):
 
     assert diff.diff_text == ""
     assert diff.content_unchanged is True
+
+
+def test_force_bypasses_exact_version_match(tmp_path):
+    """The Retrigger button's use case: same version, human wants it
+    reprocessed anyway (e.g. just added a routing label)."""
+    store = PageStore(tmp_path / "store.json")
+    body_html = "<p>Checkout must support credit card payments.</p>"
+    store.put(_stored(1, body_html))
+    page = _page(1, body_html)  # exact version match
+
+    diff = compute_diff(store, page, force=True)
+
+    assert diff.diff_text != ""
+    assert "credit card" in diff.diff_text
+    assert diff.forced is True
+    assert diff.is_first_seen is False  # honest -- there IS prior history
+
+
+def test_force_bypasses_checksum_match(tmp_path):
+    """Same as above but via the version-bumped-identical-content path (the
+    realistic case: labels changed, which bumps Confluence's version, body
+    did not)."""
+    store = PageStore(tmp_path / "store.json")
+    body_html = "<p>Checkout must support credit card payments.</p>"
+    store.put(_stored(1, body_html))
+    page = _page(2, body_html)  # version moved, content did not
+
+    diff = compute_diff(store, page, force=True)
+
+    assert diff.diff_text != ""
+    assert "credit card" in diff.diff_text
+    assert diff.forced is True
+    assert diff.content_unchanged is False  # forced path, not the plain no-op path
+
+
+def test_force_has_no_effect_on_a_genuine_content_change(tmp_path):
+    """force=True on a page that DID actually change should behave exactly
+    like force=False -- forcing only matters when there'd otherwise be
+    nothing to process."""
+    store = PageStore(tmp_path / "store.json")
+    store.put(_stored(1, "<p>Checkout must support credit card payments.</p>"))
+    page = _page(2, "<p>Checkout must support credit card and PayPal payments.</p>")
+
+    forced = compute_diff(store, page, force=True)
+    unforced = compute_diff(store, page, force=False)
+
+    assert forced.diff_text == unforced.diff_text
+    assert forced.forced is False
+    assert "PayPal" in forced.diff_text

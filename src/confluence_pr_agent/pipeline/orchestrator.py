@@ -417,7 +417,7 @@ async def _finalize_repo(
         )
 
 
-async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> PipelineResult:
+async def run_pipeline(page_id: str, deps: PipelineDeps | None = None, force: bool = False) -> PipelineResult:
     owns_deps = deps is None
     deps = deps or build_deps()
     settings = deps.settings
@@ -565,6 +565,11 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                 jira_issue_url=result.jira_issue.url if result.jira_issue else None,
                 jira_reused=result.jira_reused,
                 repo_results=result.repo_results,
+                # Structural, not re-derived per template render -- see
+                # RunRecord.flagged_scope_gap's docstring for why this is
+                # exactly the heading the out-of-scope prompt section asks
+                # the agent to use, not a guess at its wording.
+                flagged_scope_gap=bool(change and change.summary and "next steps" in change.summary.lower()),
             )
         )
         return result
@@ -591,7 +596,7 @@ async def run_pipeline(page_id: str, deps: PipelineDeps | None = None) -> Pipeli
                     )
                 )
 
-        diff = compute_diff(deps.store, page)
+        diff = compute_diff(deps.store, page, force=force)
 
         if not diff.is_first_seen and diff.diff_text == "":
             if diff.content_unchanged:

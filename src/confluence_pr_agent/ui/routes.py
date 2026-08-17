@@ -28,7 +28,7 @@ from openai import AsyncOpenAI
 from confluence_pr_agent.confluence.client import ConfluenceClient
 from confluence_pr_agent.config import clear_settings_cache, get_process_config, get_settings
 from confluence_pr_agent.jira.client import JiraClient
-from confluence_pr_agent.pipeline.poller import poll_once
+from confluence_pr_agent.pipeline.poller import poll_once, retrigger_page
 from confluence_pr_agent.pipeline.stages import STAGE_LABELS
 from confluence_pr_agent.repo.github_client import GitHubClient
 from confluence_pr_agent.repo.test_command_detection import detect_test_command
@@ -488,6 +488,22 @@ async def delete_all_runs(username: str = Depends(current_username)):
 async def delete_run(run_id: str, username: str = Depends(current_username)):
     settings = get_settings(username)
     RunStore(settings.runs_store_path).delete_run(run_id)
+    return RedirectResponse(url="/ui/runs", status_code=303)
+
+
+@router.post("/ui/runs/{run_id}/retrigger")
+async def retrigger_run(run_id: str, background_tasks: BackgroundTasks, username: str = Depends(current_username)):
+    """Force-reprocesses the same Confluence page a past run touched, even
+    if nothing textually changed since -- see poller.py::retrigger_page.
+    Looks the page_id up from the past run rather than taking it as a form
+    field, so this can't be pointed at an arbitrary page_id by a crafted
+    request. Backgrounded like every other real trigger here (poll, "Poll
+    now", the webhook) -- a real agentic engine can take minutes.
+    """
+    settings = get_settings(username)
+    run = RunStore(settings.runs_store_path).get_run(run_id)
+    if run and run.get("page_id"):
+        background_tasks.add_task(retrigger_page, settings, run["page_id"])
     return RedirectResponse(url="/ui/runs", status_code=303)
 
 
