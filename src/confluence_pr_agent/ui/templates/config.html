@@ -44,6 +44,12 @@
   @media (max-width: 900px) {
     .repolist-row { grid-template-columns: 1fr 1fr; }
   }
+
+  .test-connection { display: flex; align-items: center; gap: 0.65rem; margin: 0.9rem 0 0.4rem; }
+  .test-connection-status { margin-top: 0; }
+  .test-connection-status.ok { color: var(--ok, #1a7f37); }
+  .test-connection-status.fail { color: var(--danger, #cf222e); }
+  .test-connection-btn.pending { opacity: 0.65; cursor: wait; }
 </style>
 <h1>Configuration</h1>
 <p class="subtitle">Edits write directly to <code>.env</code> and take effect immediately — no restart needed. Secret fields never show their current value; leave one blank to keep it unchanged.</p>
@@ -115,6 +121,31 @@
         {% if f.help_text %}<div class="hint">{{ f.help_text }}</div>{% endif %}
       </div>
     {% endfor %}
+    {% if group_name == "Confluence" %}
+      <div class="test-connection">
+        <button type="button" class="btn-secondary test-connection-btn" data-service="confluence"
+                data-payload='{"base_url": "CONFLUENCE_BASE_URL", "email": "CONFLUENCE_USER_EMAIL", "api_token": "CONFLUENCE_API_TOKEN"}'>
+          Test connection
+        </button>
+        <span class="test-connection-status hint"></span>
+      </div>
+    {% elif group_name == "Jira" %}
+      <div class="test-connection">
+        <button type="button" class="btn-secondary test-connection-btn" data-service="jira"
+                data-payload='{"base_url": "JIRA_BASE_URL", "email": "JIRA_USER_EMAIL", "api_token": "JIRA_API_TOKEN"}'>
+          Test connection
+        </button>
+        <span class="test-connection-status hint"></span>
+      </div>
+    {% elif group_name == "Repository" %}
+      <div class="test-connection repo-fields" data-repo-key="GITHUB_TOKEN">
+        <button type="button" class="btn-secondary test-connection-btn" data-service="github"
+                data-payload='{"token": "GITHUB_TOKEN"}'>
+          Test connection
+        </button>
+        <span class="test-connection-status hint"></span>
+      </div>
+    {% endif %}
   </fieldset>
   {% endfor %}
   <button type="submit">Save</button>
@@ -408,6 +439,47 @@
     });
   }
 
+  // Each "Test connection" button's data-payload maps the JSON key the
+  // /ui/test-connection/{service} route expects to the id of the field
+  // holding it on this page -- read live at click time, not from whatever
+  // was last saved, so a credential just pasted in (and not yet saved) gets
+  // tested too. A blank secret field (unchanged, per the "blank means
+  // leave it" convention) is sent through as "" -- the route falls back to
+  // this user's already-saved value for it server-side.
+  function initTestConnectionButtons() {
+    document.querySelectorAll(".test-connection-btn").forEach((btn) => {
+      const statusEl = btn.parentElement.querySelector(".test-connection-status");
+      const fieldMap = JSON.parse(btn.dataset.payload || "{}");
+      btn.addEventListener("click", async () => {
+        const payload = {};
+        for (const [payloadKey, fieldId] of Object.entries(fieldMap)) {
+          const el = document.getElementById(fieldId);
+          payload[payloadKey] = el ? el.value : "";
+        }
+        btn.classList.add("pending");
+        btn.disabled = true;
+        statusEl.className = "test-connection-status hint";
+        statusEl.textContent = "Testing…";
+        try {
+          const resp = await fetch(`/ui/test-connection/${btn.dataset.service}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const data = await resp.json();
+          statusEl.textContent = data.message || (data.ok ? "Connected." : "Failed.");
+          statusEl.className = "test-connection-status hint " + (data.ok ? "ok" : "fail");
+        } catch {
+          statusEl.textContent = "Couldn't reach the server to test this.";
+          statusEl.className = "test-connection-status hint fail";
+        } finally {
+          btn.classList.remove("pending");
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
   // Populates every field on this page from a local .env-style file in one
   // go, entirely client-side (no upload, nothing hits the server until
   // Save) -- same pattern as the config picker in
@@ -520,6 +592,7 @@
     initTagLists();
     initRepoLists();
     initEnvFileLoader();
+    initTestConnectionButtons();
   });
 </script>
 {% endblock %}

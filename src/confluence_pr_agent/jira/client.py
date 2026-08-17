@@ -39,6 +39,16 @@ class JiraClient:
     def _issue_url(self, key: str) -> str:
         return f"{self._base_url}/browse/{key}"
 
+    async def test_connection(self) -> str:
+        """Validates the site URL + credentials via /myself -- the same
+        "cheapest authenticated call" idiom as ConfluenceClient.test_connection
+        and GitHubClient.test_connection, used by the config UI's "Test
+        connection" button. Returns the account's display name.
+        """
+        resp = await self._client.get(f"{self._base_url}/rest/api/{API_VERSION}/myself", auth=self._auth)
+        resp.raise_for_status()
+        return resp.json().get("displayName", "")
+
     async def create_issue(
         self,
         project_key: str,

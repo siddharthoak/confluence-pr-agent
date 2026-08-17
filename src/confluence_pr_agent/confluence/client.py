@@ -34,6 +34,19 @@ class ConfluenceClient:
         if self._owns_client:
             await self._client.aclose()
 
+    async def test_connection(self) -> str:
+        """Validates the base URL + credentials via the cheapest authenticated
+        call Confluence Cloud's REST API offers -- no space or page needed.
+        Used by the config UI's "Test connection" button so a bad token or
+        wrong /wiki URL surfaces here instead of silently failing deep into a
+        real pipeline run. Returns the account's display name; raises (like
+        every other method here) on failure, leaving status-code -> message
+        translation to the caller.
+        """
+        resp = await self._client.get(f"{self._base_url}/rest/api/user/current", auth=self._auth)
+        resp.raise_for_status()
+        return resp.json().get("displayName", "")
+
     async def fetch_page(self, page_id: str) -> PageSnapshot:
         """Fetch the current storage-format body + version + labels for a page.
 

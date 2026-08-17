@@ -22,7 +22,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from confluence_pr_agent.confluence.client import ConfluenceClient
 from confluence_pr_agent.config import clear_settings_cache, get_process_config, get_settings
+from confluence_pr_agent.jira.client import JiraClient
 from confluence_pr_agent.pipeline.poller import poll_once
 from confluence_pr_agent.pipeline.stages import STAGE_LABELS
 from confluence_pr_agent.repo.github_client import GitHubClient
@@ -299,6 +301,81 @@ async def detect_test_command_route(repo: str, username: str = Depends(current_u
         return {"test_command": None}
     finally:
         await github.aclose()
+
+
+def _http_error_message(exc: httpx.HTTPStatusError) -> str:
+    status = exc.response.status_code
+    if status in (401, 403):
+        return "Authentication failed — check the credentials."
+    if status == 404:
+        return "Not found — check the URL/key."
+    return f"Request failed (HTTP {status})."
+
+
+@router.post("/ui/test-connection/{service}")
+async def test_connection(service: str, request: Request, username: str = Depends(current_username)):
+    """Validates a set of credentials live -- called by each tab's "Test
+    connection" button before Save, so a typo'd token or wrong base URL
+    surfaces here instead of silently failing deep into a real pipeline run.
+
+    Reads values from the request body (the page's current, possibly
+    unsaved form fields), not this user's stored Settings, so the test
+    reflects exactly what's about to be saved -- except a blank secret
+    field, which falls back to the already-saved value, same "blank means
+    unchanged" semantics POST /ui/config uses (a secret field is never
+    redisplayed, so JS can't send back what it can't read).
+    """
+    settings = get_settings(username)
+    payload = await request.json()
+
+    def value(field_key: str, settings_key: str) -> str:
+        raw = str(payload.get(field_key) or "").strip()
+        return raw or str(getattr(settings, settings_key, "") or "")
+
+    try:
+        if service == "confluence":
+            base_url = value("base_url", "confluence_base_url")
+            email = value("email", "confluence_user_email")
+            token = value("api_token", "confluence_api_token")
+            if not (base_url and email and token):
+                return {"ok": False, "message": "Base URL, account email, and API token are all required."}
+            client = ConfluenceClient(base_url, email, token)
+            try:
+                name = await client.test_connection()
+            finally:
+                await client.aclose()
+            return {"ok": True, "message": f"Connected as {name}." if name else "Connected."}
+
+        if service == "jira":
+            base_url = value("base_url", "jira_base_url")
+            email = value("email", "jira_user_email")
+            token = value("api_token", "jira_api_token")
+            if not (base_url and email and token):
+                return {"ok": False, "message": "Site URL, account email, and API token are all required."}
+            client = JiraClient(base_url, email, token)
+            try:
+                name = await client.test_connection()
+            finally:
+                await client.aclose()
+            return {"ok": True, "message": f"Connected as {name}." if name else "Connected."}
+
+        if service == "github":
+            token = value("token", "github_token")
+            if not token:
+                return {"ok": False, "message": "GitHub PAT is required."}
+            client = GitHubClient(token)
+            try:
+                login = await client.test_connection()
+            finally:
+                await client.aclose()
+            return {"ok": True, "message": f"Connected as {login}." if login else "Connected."}
+
+        return {"ok": False, "message": f"Unknown service: {service}"}
+
+    except httpx.HTTPStatusError as exc:
+        return {"ok": False, "message": _http_error_message(exc)}
+    except httpx.HTTPError as exc:
+        return {"ok": False, "message": f"Couldn't reach the server: {exc}"}
 
 
 # ---------------------------------------------------------------------------

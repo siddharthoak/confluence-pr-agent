@@ -31,6 +31,16 @@ class GitHubClient:
         if self._owns_client:
             await self._client.aclose()
 
+    async def test_connection(self) -> str:
+        """Validates the PAT via /user -- the same "cheapest authenticated
+        call" idiom as ConfluenceClient.test_connection and
+        JiraClient.test_connection, used by the config UI's "Test connection"
+        button. Returns the token's login; raises on an invalid/expired PAT.
+        """
+        resp = await self._client.get("/user")
+        resp.raise_for_status()
+        return resp.json().get("login", "")
+
     async def open_pull_request(
         self,
         owner_repo: str,
