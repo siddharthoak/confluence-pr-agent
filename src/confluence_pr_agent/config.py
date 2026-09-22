@@ -30,7 +30,7 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from confluence_pr_agent.models import RepoTarget
@@ -127,6 +127,13 @@ class Settings(BaseSettings):
     confluence_poll_enabled: bool = Field(default=False)
     confluence_poll_interval_seconds: int = Field(default=300)
 
+    # PR feedback loop -- when enabled, a background poller watches open PRs
+    # tagged with "agent:opened" for new review comments, then re-runs the
+    # change engine with the comment body as retry_context and pushes a
+    # follow-up commit. See pipeline/pr_feedback_poller.py.
+    pr_feedback_poll_enabled: bool = Field(default=False)
+    pr_feedback_poll_interval_seconds: int = Field(default=300)
+
     # Target repo -- REPO_PROVIDER is forward-looking config surface only:
     # github is the only value the pipeline actually implements (see
     # pipeline/orchestrator.py::build_deps, which raises if it's anything
@@ -145,6 +152,7 @@ class Settings(BaseSettings):
     target_repo: str = Field(default="your-org/your-repo")
     target_repo_base_branch: str = Field(default="main")
     target_repo_test_command: str = Field(default="pytest")
+    target_repo_lint_command: str = Field(default="")
     # Real multi-repo config -- a JSON array of {target_repo, base_branch,
     # test_command, label} objects, e.g. for a change that needs coordinated
     # edits across several coupled repos (see pipeline/orchestrator.py's
@@ -217,6 +225,20 @@ class Settings(BaseSettings):
     jira_api_token: str = Field(default="")
     jira_project_key: str = Field(default="")
     jira_issue_type: str = Field(default="Story")
+    jira_bug_poll_enabled: bool = Field(default=False)
+    jira_bug_poll_interval_seconds: int = Field(default=300)
+    jira_bug_jql: str = Field(default="")
+    jira_poll_limit: int = Field(default=25)
+
+    @field_validator("jira_base_url", mode="before")
+    @classmethod
+    def normalize_jira_base_url(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        value = value.strip()
+        if value and "://" not in value:
+            return f"https://{value}"
+        return value
     # Comment-only, never written to the real Story Points field -- that
     # field is a per-instance custom field (customfield_NNNNN) with no
     # stable name, and an LLM's number has no basis in a team's own velocity
@@ -307,6 +329,7 @@ class Settings(BaseSettings):
                 target_repo=self.target_repo,
                 base_branch=self.target_repo_base_branch,
                 test_command=self.target_repo_test_command,
+                lint_command=self.target_repo_lint_command,
                 label="",
             )
         ]
@@ -344,7 +367,17 @@ class Settings(BaseSettings):
 def get_settings(username: str) -> Settings:
     process = get_process_config()
     user_dir = process.user_dir_path(username)
-    return Settings(_env_file=str(user_dir / ".env"), data_dir=str(user_dir))
+    user_env = user_dir / ".env"
+
+    # Preserve the existing single-user setup: the configured default user
+    # starts from the mounted top-level .env, while additional identities
+    # still receive isolated, hardcoded defaults until they configure them.
+    if username == process.resolved_default_user and not user_env.exists():
+        root_env = Path(".env")
+        if root_env.exists():
+            user_env.write_bytes(root_env.read_bytes())
+
+    return Settings(_env_file=str(user_env), data_dir=str(user_dir))
 
 
 def clear_settings_cache() -> None:

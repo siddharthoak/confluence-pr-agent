@@ -142,6 +142,16 @@ CONFIG_FIELDS: list[ConfigField] = [
             "overrides the global Coding standards fallback below for that repo only."
         ),
     ),
+    ConfigField(
+        "TARGET_REPO_TEST_COMMAND", "Test command (single-repo fallback)", "Repository",
+        placeholder="pytest",
+        help_text="Used when TARGET_REPOS_JSON is blank. Runs before the quality gate.",
+    ),
+    ConfigField(
+        "TARGET_REPO_LINT_COMMAND", "Lint / security command (single-repo fallback)", "Repository",
+        placeholder="ruff check && bandit -q -r .",
+        help_text="Optional. Used after tests pass when TARGET_REPOS_JSON is blank.",
+    ),
     ConfigField("GITHUB_TOKEN", "GitHub PAT", "Repository", secret=True),
     ConfigField(
         "CODING_STANDARDS", "Coding standards (global fallback)", "Repository",
@@ -161,6 +171,18 @@ CONFIG_FIELDS: list[ConfigField] = [
             "per run and folded into the same prompt section as Coding standards above. Leave blank "
             "to skip."
         ),
+    ),
+    ConfigField(
+        "PR_FEEDBACK_POLL_ENABLED", "Enable PR feedback loop", "Repository", input_type="select",
+        options=["true", "false"],
+        help_text=(
+            "When enabled, the agent monitors open PRs carrying the agent:opened label for review "
+            "comments, re-runs the change engine to address feedback, and pushes follow-up commits."
+        ),
+    ),
+    ConfigField(
+        "PR_FEEDBACK_POLL_INTERVAL_SECONDS", "PR feedback poll interval (seconds)", "Repository",
+        input_type="number", placeholder="300",
     ),
     # Change engine
     ConfigField(
@@ -247,6 +269,10 @@ CONFIG_FIELDS: list[ConfigField] = [
         options=["Story", "Task", "Bug", "Epic"],
         help_text="Must exist in the target project's issue type scheme -- team-managed Kanban projects, for example, often lack \"Story\".",
     ),
+    ConfigField("JIRA_BUG_POLL_ENABLED", "Poll Jira for bugs", "Jira", input_type="select", options=["true", "false"]),
+    ConfigField("JIRA_BUG_POLL_INTERVAL_SECONDS", "Bug poll interval (seconds)", "Jira", input_type="number", placeholder="300"),
+    ConfigField("JIRA_BUG_JQL", "Bug polling JQL", "Jira", placeholder="project = KAN AND statusCategory != Done"),
+    ConfigField("JIRA_POLL_LIMIT", "Tickets per poll", "Jira", input_type="number", placeholder="25"),
     ConfigField(
         "JIRA_SUGGEST_STORY_POINTS", "Suggest story points", "Jira", input_type="select",
         options=["true", "false"],

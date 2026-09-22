@@ -28,10 +28,23 @@ from openai import AsyncOpenAI
 from confluence_pr_agent.confluence.client import ConfluenceClient
 from confluence_pr_agent.config import clear_settings_cache, get_process_config, get_settings
 from confluence_pr_agent.jira.client import JiraClient
+from confluence_pr_agent.jira.bug_triage import (
+    analyze_issue,
+    create_fix_run,
+    clear_analysis_display,
+    fix_issue,
+    load_scan,
+    poll_jira,
+)
 from confluence_pr_agent.pipeline.poller import poll_once, retrigger_page
+from confluence_pr_agent.pipeline.jira_bug_poller import mark_approved_issues
 from confluence_pr_agent.pipeline.stages import STAGE_LABELS
 from confluence_pr_agent.repo.github_client import GitHubClient
-from confluence_pr_agent.repo.test_command_detection import detect_tech_stack, detect_test_command
+from confluence_pr_agent.repo.test_command_detection import (
+    detect_lint_command,
+    detect_tech_stack,
+    detect_test_command,
+)
 from confluence_pr_agent.storage.run_store import RunStore
 from confluence_pr_agent.ui.auth import current_username
 from confluence_pr_agent.ui.config_fields import (
@@ -247,6 +260,65 @@ async def config_form(request: Request, username: str = Depends(current_username
     return templates.TemplateResponse(request, "config.html", _config_context(username))
 
 
+@router.get("/ui/jira-bugs")
+async def jira_bugs(request: Request, username: str = Depends(current_username)):
+    settings = get_settings(username)
+    analysis_issue_key = request.cookies.get("jira_analysis_once")
+    scan = load_scan(settings)
+    response = templates.TemplateResponse(request, "jira_bugs.html", {"scan": scan, "settings": settings})
+    if analysis_issue_key:
+        response.delete_cookie("jira_analysis_once")
+    return response
+
+
+@router.post("/ui/jira-bugs/poll")
+async def jira_bugs_poll(request: Request, username: str = Depends(current_username)):
+    try:
+        settings = get_settings(username)
+        scan = await poll_jira(settings)
+        mark_approved_issues(settings, scan)
+        return RedirectResponse(url="/ui/jira-bugs?polled=1", status_code=303)
+    except httpx.HTTPStatusError as exc:
+        return RedirectResponse(url=f"/ui/jira-bugs?error={_http_error_message(exc)}", status_code=303)
+    except httpx.HTTPError as exc:
+        return RedirectResponse(url=f"/ui/jira-bugs?error=Couldn%27t%20reach%20Jira:%20{str(exc)[:120]}", status_code=303)
+    except Exception as exc:
+        return RedirectResponse(url=f"/ui/jira-bugs?error={str(exc)[:180]}", status_code=303)
+
+
+@router.post("/ui/jira-bugs/{issue_key}/analyze")
+async def jira_bug_analyze(issue_key: str, username: str = Depends(current_username)):
+    try:
+        await analyze_issue(get_settings(username), issue_key)
+        response = RedirectResponse(url="/ui/jira-bugs?analyzed=1", status_code=303)
+        response.set_cookie("jira_analysis_once", issue_key, httponly=True, samesite="lax")
+        return response
+    except Exception as exc:
+        return RedirectResponse(url=f"/ui/jira-bugs?error={str(exc)[:180]}", status_code=303)
+
+
+@router.post("/ui/jira-bugs/{issue_key}/fix")
+async def jira_bug_fix(issue_key: str, background_tasks: BackgroundTasks, username: str = Depends(current_username)):
+    try:
+        settings = get_settings(username)
+        scan = load_scan(settings)
+        issue = next((item for item in scan["issues"] if item["key"] == issue_key), None)
+        if not issue:
+            raise ValueError("Issue is not in the latest Jira scan")
+        if issue.get("triage") not in {"analyzed", "approved"}:
+            raise ValueError("Analyze the bug and wait for developer approval before starting the agent")
+        approved_name = settings.jira_approved_status_name.strip().lower()
+        if not settings.jira_approval_required or not approved_name:
+            raise ValueError("Configure Jira approval and an approved status before starting the agent")
+        if issue.get("status", "").strip().lower() != approved_name:
+            raise ValueError(f"The developer must move this bug to {settings.jira_approved_status_name!r} first")
+        run_id = create_fix_run(settings, issue)
+        background_tasks.add_task(fix_issue, settings, issue_key, run_id)
+        return RedirectResponse(url=f"/ui/jira-bugs?started=1&run_id={run_id}", status_code=303)
+    except Exception as exc:
+        return RedirectResponse(url=f"/ui/jira-bugs?error={str(exc)[:180]}", status_code=303)
+
+
 @router.post("/ui/config")
 async def save_config(request: Request, username: str = Depends(current_username)):
     form = await request.form()
@@ -293,9 +365,10 @@ async def save_config(request: Request, username: str = Depends(current_username
 async def detect_test_command_route(repo: str, username: str = Depends(current_username)):
     """Called by the repeating repo-config editor's JS when a row's repo
     field is filled in -- looks at that repo's actual root files (via this
-    user's own GitHub token) and suggests a test command instead of leaving
-    it blank or wrong. Best-effort: any failure (bad repo name, no access,
-    network) degrades to {"test_command": None, "tech_stack": None}, same
+    user's own GitHub token) and suggests test and lint/security commands
+    instead of leaving them blank or wrong. Best-effort: any failure (bad
+    repo name, no access, network) degrades to {"test_command": None,
+    "lint_command": None, "tech_stack": None}, same
     fail-open idiom as everything else here -- this is a convenience, not
     something that should be able to break the config page.
 
@@ -306,14 +379,18 @@ async def detect_test_command_route(repo: str, username: str = Depends(current_u
     settings = get_settings(username)
     repo = repo.strip()
     if not repo or not settings.github_token:
-        return {"test_command": None, "tech_stack": None}
+        return {"test_command": None, "lint_command": None, "tech_stack": None}
 
     github = GitHubClient(settings.github_token)
     try:
         files = await github.list_root_files(repo)
-        return {"test_command": detect_test_command(files), "tech_stack": detect_tech_stack(files)}
+        return {
+            "test_command": detect_test_command(files),
+            "lint_command": detect_lint_command(files),
+            "tech_stack": detect_tech_stack(files),
+        }
     except Exception:
-        return {"test_command": None, "tech_stack": None}
+        return {"test_command": None, "lint_command": None, "tech_stack": None}
     finally:
         await github.aclose()
 

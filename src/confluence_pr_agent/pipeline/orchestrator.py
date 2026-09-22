@@ -67,6 +67,7 @@ from confluence_pr_agent.notifications.templates import build_summary_email
 from confluence_pr_agent.pipeline.stages import STAGE_KEYS
 from confluence_pr_agent.repo.git_client import GitClient
 from confluence_pr_agent.repo.github_client import GitHubClient
+from confluence_pr_agent.repo.reviewer_cache import get_best_reviewer
 from confluence_pr_agent.storage.page_store import PageStore, StoredPage
 from confluence_pr_agent.storage.pending_approval_store import PendingApproval, PendingApprovalStore
 from confluence_pr_agent.storage.run_store import RunStore
@@ -83,10 +84,16 @@ _ASSESSMENT_ICON = {"pass": "✅", "warning": "⚠️", "fail": "❌"}
 # is present.
 LABEL_NEEDS_WORK = "agent:needs-work"
 LABEL_WARNING = "agent:warning"
-_LABEL_COLOR = {LABEL_NEEDS_WORK: "d73a4a", LABEL_WARNING: "fbca04"}
+LABEL_AGENT_OPENED = "agent:opened"
+_LABEL_COLOR = {
+    LABEL_NEEDS_WORK: "d73a4a",
+    LABEL_WARNING: "fbca04",
+    LABEL_AGENT_OPENED: "1d76db",
+}
 _LABEL_DESCRIPTION = {
     LABEL_NEEDS_WORK: "Opened by confluence-pr-agent -- the LLM judge found at least one criterion clearly unmet.",
     LABEL_WARNING: "Opened by confluence-pr-agent -- the LLM judge approved with at least one non-blocking concern.",
+    LABEL_AGENT_OPENED: "Opened by confluence-pr-agent -- a human review or follow-up prompt may re-open this PR.",
 }
 
 
@@ -122,6 +129,7 @@ def _build_pr_body(
     parts = [
         f"**Source:** [{page.title}]({page.url}) (v{diff.previous_version} -> v{page.version})\n",
         f"**Summary of change:**\n{change.summary}\n",
+        "Quality gate:  passed\n",
     ]
 
     if judge_result and judge_result.verdict == "rejected":
@@ -398,7 +406,22 @@ async def _finalize_repo(
                 draft=is_rejected,
             )
 
+        reviewer = get_best_reviewer(str(repo_dir), files_changed)
+        if reviewer:
+            await deps.github.request_reviewers(rt.target_repo, pull_request.number, [reviewer])
+
         await _sync_verdict_label(deps.github, rt.target_repo, pull_request.number, verdict_for_labels)
+
+        try:
+            await deps.github.ensure_label(
+                rt.target_repo,
+                LABEL_AGENT_OPENED,
+                _LABEL_COLOR[LABEL_AGENT_OPENED],
+                _LABEL_DESCRIPTION[LABEL_AGENT_OPENED],
+            )
+            await deps.github.add_labels(rt.target_repo, pull_request.number, [LABEL_AGENT_OPENED])
+        except Exception as exc:
+            logger.warning("Failed to add %s label to PR #%s: %s", LABEL_AGENT_OPENED, pull_request.number, exc)
 
         return RepoChangeResult(
             target_repo=rt.target_repo,
@@ -1105,10 +1128,19 @@ async def run_pipeline(
         if opened_results:
             merged_repo_prs: dict = dict((previous_page or {}).get("repo_prs") or {})
             for r in opened_results:
-                merged_repo_prs[r.target_repo] = {
+                previous_entry = merged_repo_prs.get(r.target_repo) or {}
+                new_entry = {
                     "open_pr_number": r.pull_request.number,
                     "open_pr_branch": r.pull_request.branch,
                 }
+                # Keep feedback-loop cursors when a Confluence update reuses
+                # the same open PR. A newly opened PR starts with a clean
+                # cursor and attempt budget.
+                if previous_entry.get("open_pr_number") == r.pull_request.number:
+                    for key in ("last_seen_comment_id", "feedback_attempts"):
+                        if key in previous_entry:
+                            new_entry[key] = previous_entry[key]
+                merged_repo_prs[r.target_repo] = new_entry
             primary = opened_results[0].pull_request
             deps.store.put(
                 StoredPage(

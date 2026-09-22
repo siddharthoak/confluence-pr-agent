@@ -15,7 +15,9 @@ from confluence_pr_agent.config import get_process_config, get_settings
 from confluence_pr_agent.pipeline.approval_poller import approval_poll_scan_loop
 from confluence_pr_agent.pipeline.orchestrator import run_pipeline
 from confluence_pr_agent.pipeline.poller import poll_scan_loop
+from confluence_pr_agent.pipeline.pr_feedback_poller import pr_feedback_poll_scan_loop
 from confluence_pr_agent.pipeline.sprint_runner import sprint_runner_scan_loop
+from confluence_pr_agent.pipeline.jira_bug_poller import jira_bug_poll_scan_loop
 from confluence_pr_agent.ui.plan_sprint import router as plan_sprint_router
 from confluence_pr_agent.ui.routes import router as ui_router
 from confluence_pr_agent.webhook.schemas import extract_event_type, extract_page_id
@@ -37,11 +39,17 @@ async def lifespan(app: FastAPI):
     approval_task = asyncio.create_task(approval_poll_scan_loop())
     logger.info("Starting the per-user sprint runner scan loop")
     sprint_task = asyncio.create_task(sprint_runner_scan_loop())
+    logger.info("Starting the per-user Jira bug poll scan loop")
+    jira_bug_task = asyncio.create_task(jira_bug_poll_scan_loop())
+    logger.info("Starting the per-user PR feedback poll scan loop")
+    pr_feedback_task = asyncio.create_task(pr_feedback_poll_scan_loop())
     yield
     poll_task.cancel()
     approval_task.cancel()
     sprint_task.cancel()
-    for task in (poll_task, approval_task, sprint_task):
+    jira_bug_task.cancel()
+    pr_feedback_task.cancel()
+    for task in (poll_task, approval_task, sprint_task, jira_bug_task, pr_feedback_task):
         try:
             await task
         except asyncio.CancelledError:

@@ -14,6 +14,20 @@ from confluence_pr_agent.models import JiraIssueResult, JiraIssueStatus
 API_VERSION = "3"
 
 
+def normalize_jira_base_url(base_url: str) -> str:
+    """Return a Jira site URL that httpx can request.
+
+    The config UI historically accepted host-only values such as
+    ``team.atlassian.net``. Jira URLs are HTTPS by default, so add the
+    scheme rather than allowing httpx to fail with a low-level
+    "missing an 'http://' or 'https://' protocol" error.
+    """
+    base_url = base_url.strip()
+    if base_url and "://" not in base_url:
+        return f"https://{base_url}"
+    return base_url
+
+
 class JiraClient:
     """`base_url` is the site root, e.g. https://your-team.atlassian.net --
     no /wiki suffix (that's Confluence-specific; Jira Cloud's REST API and
@@ -27,7 +41,7 @@ class JiraClient:
         api_token: str,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        self._base_url = base_url.rstrip("/")
+        self._base_url = normalize_jira_base_url(base_url).rstrip("/")
         self._auth = httpx.BasicAuth(email, api_token)
         self._client = http_client or httpx.AsyncClient(timeout=30.0)
         self._owns_client = http_client is None
@@ -48,6 +62,37 @@ class JiraClient:
         resp = await self._client.get(f"{self._base_url}/rest/api/{API_VERSION}/myself", auth=self._auth)
         resp.raise_for_status()
         return resp.json().get("displayName", "")
+
+    async def search_issues(self, jql: str, limit: int = 25) -> list[dict]:
+        """Return a small, UI-safe snapshot of issues matching JQL.
+
+        Jira Cloud retired the legacy GET /search resource with HTTP 410.
+        The current endpoint is POST /search/jql, with the query in JSON.
+        """
+        resp = await self._client.post(
+            f"{self._base_url}/rest/api/{API_VERSION}/search/jql",
+            auth=self._auth,
+            json={
+                "jql": jql,
+                "maxResults": limit,
+                "fields": ["summary", "description", "status", "issuetype", "priority", "labels"],
+            },
+        )
+        resp.raise_for_status()
+        issues = []
+        for issue in resp.json().get("issues", []):
+            fields = issue.get("fields", {})
+            issues.append({
+                "key": issue.get("key", ""),
+                "summary": fields.get("summary", ""),
+                "description": fields.get("description", ""),
+                "status": (fields.get("status") or {}).get("name", ""),
+                "issue_type": (fields.get("issuetype") or {}).get("name", ""),
+                "priority": (fields.get("priority") or {}).get("name", ""),
+                "labels": fields.get("labels") or [],
+                "url": self._issue_url(issue.get("key", "")),
+            })
+        return issues
 
     async def create_issue(
         self,

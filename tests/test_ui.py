@@ -156,6 +156,68 @@ def test_non_numeric_value_for_a_number_field_is_rejected(client, _isolated_env_
     assert "CHANGE_AGENT_MAX_ATTEMPTS=3" in content
 
 
+def test_jira_bug_fix_requires_analysis_and_starts_background_run(client, monkeypatch):
+    settings = get_settings("testuser")
+    settings.jira_approval_required = True
+    settings.jira_approved_status_name = "Approved"
+    settings.data_dir_path.mkdir(parents=True, exist_ok=True)
+    (settings.data_dir_path / "jira_bug_scans.json").write_text(json.dumps({"scanned_at": "now", "issues": [{
+        "key": "KAN-2", "summary": "Broken checkout", "url": "https://jira/KAN-2",
+        "status": "Approved", "priority": "Medium", "triage": "analyzed",
+    }]}))
+    calls = []
+
+    async def fake_fix_issue(settings, issue_key, run_id):
+        calls.append((issue_key, run_id))
+
+    monkeypatch.setattr(ui_routes, "fix_issue", fake_fix_issue)
+
+    resp = client.post("/ui/jira-bugs/KAN-2/fix", follow_redirects=False)
+
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/ui/jira-bugs?started=1&run_id=")
+    assert calls[0][0] == "KAN-2"
+    assert calls[0][1]
+
+
+def test_jira_bug_analysis_remains_visible_after_fix_workflow_starts(client):
+    settings = get_settings("testuser")
+    settings.data_dir_path.mkdir(parents=True, exist_ok=True)
+    (settings.data_dir_path / "jira_bug_scans.json").write_text(json.dumps({"scanned_at": "now", "issues": [{
+        "key": "KAN-2",
+        "summary": "Broken checkout",
+        "status": "Approved",
+        "priority": "Medium",
+        "triage": "pr_opened",
+        "analysis": "Fix the checkout bug by validating the request payload.",
+        "analysis_repos": ["acme/widgets"],
+        "analysis_plan": ["Inspect request validation", "Patch the handler"],
+        "pr_url": "https://github.example/acme/widgets/pull/41",
+    }]}))
+
+    resp = client.get("/ui/jira-bugs")
+
+    assert resp.status_code == 200
+    assert "Fix the checkout bug by validating the request payload." in resp.text
+    assert "acme/widgets" in resp.text
+    assert "Open PR" in resp.text
+
+
+def test_jira_bug_poll_turns_unauthorized_response_into_actionable_message(client, monkeypatch):
+    request = httpx.Request("GET", "https://jira.example.com/rest/api/3/myself")
+    response = httpx.Response(401, request=request)
+
+    async def fail_poll(settings):
+        raise httpx.HTTPStatusError("unauthorized", request=request, response=response)
+
+    monkeypatch.setattr(ui_routes, "poll_jira", fail_poll)
+
+    resp = client.post("/ui/jira-bugs/poll", follow_redirects=False)
+
+    assert resp.status_code == 303
+    assert "Authentication%20failed" in resp.headers["location"]
+
+
 def test_runs_list_empty_state(client):
     resp = client.get("/ui/runs")
     assert resp.status_code == 200

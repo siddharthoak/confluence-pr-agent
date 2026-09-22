@@ -16,8 +16,9 @@ class GitCommandError(RuntimeError):
 
 
 async def _run(*args: str, cwd: Path | None = None) -> str:
+    git_args = ["git", "-c", "safe.directory=*", *args[1:]] if args and args[0] == "git" else list(args)
     process = await asyncio.create_subprocess_exec(
-        *args,
+        *git_args,
         cwd=str(cwd) if cwd else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -25,7 +26,7 @@ async def _run(*args: str, cwd: Path | None = None) -> str:
     stdout, _ = await process.communicate()
     output = stdout.decode("utf-8", errors="replace")
     if process.returncode != 0:
-        raise GitCommandError(list(args), process.returncode, output)
+        raise GitCommandError(git_args, process.returncode, output)
     return output
 
 
@@ -107,3 +108,8 @@ class GitClient:
 
     async def push(self, repo_dir: Path, branch_name: str) -> None:
         await _run("git", "push", "-u", "origin", branch_name, cwd=repo_dir)
+
+    async def head_sha(self, repo_dir: Path) -> str:
+        """Returns the current HEAD commit SHA."""
+        output = await _run("git", "rev-parse", "HEAD", cwd=repo_dir)
+        return output.strip()
